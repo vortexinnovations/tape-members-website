@@ -1,10 +1,18 @@
 import Image from "next/image";
+import AppInstallButton from "./components/AppInstallButton";
 
-const APP_LINK = "https://tapemembers.app.link/6APDL58VB9UO";
-
+/**
+ * Landing page at tapemembers.com/
+ *
+ * Intentionally minimal — one hero image, a Tape-font headline,
+ * a one-line pitch, and a single device-aware install button that
+ * deep-links into the app if installed. The install flow is
+ * Branch-powered so any reel-share attribution survives the
+ * install hop (see AppInstallButton).
+ */
 export default function Home() {
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden">
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-black">
       {/* Background image */}
       <Image
         src="/bg.jpg"
@@ -15,48 +23,23 @@ export default function Home() {
         quality={85}
       />
 
-      {/* Dark overlay for readability */}
-      <div className="absolute inset-0 bg-black/40" />
+      {/* Dark overlay for headline readability */}
+      <div className="absolute inset-0 bg-black/55" />
 
       {/* Content */}
-      <div className="relative z-10 flex flex-col items-center gap-6 px-6 text-center">
-        <h1 className="text-4xl font-bold tracking-[0.15em] text-white uppercase sm:text-5xl md:text-7xl">
-          All Roads Lead to Tape
+      <div className="relative z-10 flex flex-col items-center gap-7 px-6 text-center">
+        <h1 className="font-tape text-5xl font-extrabold tracking-[0.15em] text-white uppercase sm:text-6xl md:text-8xl">
+          All Roads Lead
+          <br />
+          to Tape
         </h1>
 
-        <p className="text-base font-light italic text-white/90 sm:text-lg md:text-xl">
+        <p className="max-w-md text-base font-light italic text-white/85 sm:text-lg">
           To join the guestlist please download our members app
         </p>
 
-        <div className="mt-4 flex flex-col items-center gap-4 sm:flex-row sm:gap-8">
-          <a
-            href={APP_LINK}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="transition-opacity hover:opacity-80"
-          >
-            <Image
-              src="/google-play-badge.png"
-              alt="Get it on Google Play"
-              width={180}
-              height={53}
-              className="h-[53px] w-auto"
-            />
-          </a>
-          <a
-            href={APP_LINK}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="transition-opacity hover:opacity-80"
-          >
-            <Image
-              src="/app-store-badge.png"
-              alt="Download on the App Store"
-              width={180}
-              height={53}
-              className="h-[53px] w-auto"
-            />
-          </a>
+        <div className="mt-2">
+          <AppInstallButton />
         </div>
       </div>
     </main>

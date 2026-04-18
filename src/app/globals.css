@@ -1,1 +1,46 @@
 @import "tailwindcss";
+
+/* Theme tokens — keeps all the brand choices in one place so each
+ * page doesn't re-derive them. Match the Flutter app's colour
+ * language (accent3 copper = Tape brand, dark primary bg) so web +
+ * native read as one system.
+ */
+@theme {
+  /* Brand copper — matches FlutterFlowTheme.accent3 in the app. */
+  --color-tape-accent: #cb775a;
+  /* Dark canvases — match Flutter primaryBackground / secondaryBackground. */
+  --color-tape-bg: #0a0a0a;
+  --color-tape-surface: #171717;
+  /* Muted text — matches secondaryText. */
+  --color-tape-muted: rgba(255, 255, 255, 0.65);
+
+  /* Font families — wired from next/font in layout.tsx. */
+  --font-display: var(--font-tape), "Courier New", monospace;
+  --font-body: var(--font-poppins), system-ui, sans-serif;
+}
+
+/* Utility class so headlines can opt into the tape label face. */
+.font-tape {
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+}
+
+/* For the blurred reel share background: keep the video covering
+ * the viewport even when its aspect ratio doesn't match, with a
+ * heavy blur so the brand card on top reads cleanly. */
+.reel-background-video {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(28px) saturate(1.1);
+  transform: scale(1.15);
+}
+
+/* Reach-around for iOS Safari's autoplay restrictions — the video
+ * must be `muted + playsinline` set attribute-side; wrap the element
+ * in this class so CSS can't break those. */
+.reel-background-video::-webkit-media-controls {
+  display: none !important;
+}
