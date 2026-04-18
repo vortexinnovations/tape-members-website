@@ -41,6 +41,17 @@ export default async function ReelSharePage({
     return <ReelFallbackPage reelId={id} referrer={ref} />;
   }
 
+  // Anonymous / unnamed submissions get a nicer frame than
+  // "ANONYMOUS shared a reel". We swap in the Tape London logo as
+  // the avatar and reword the identity line to "A moment from
+  // Tape London" — reads as a curated club moment instead of an
+  // impersonal anonymous upload. Keeps named reels exactly as they
+  // are.
+  const isAnonymous =
+    !reel.creatorName || reel.creatorName.trim().toLowerCase() === "anonymous";
+  const displayName = isAnonymous ? "A Moment from Tape London" : reel.creatorName;
+  const avatarUrl = isAnonymous || !reel.creatorPhotoUrl ? TAPE_LOGO_URL : reel.creatorPhotoUrl;
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-black text-white">
       {/* Blurred background video — mounts as the only full-screen
@@ -78,24 +89,23 @@ export default async function ReelSharePage({
         <div className="w-full max-w-md rounded-3xl border border-white/10 bg-black/55 p-8 backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
           {/* Creator identity */}
           <div className="mb-5 flex items-center gap-3">
-            {reel.creatorPhotoUrl ? (
-              <Image
-                src={reel.creatorPhotoUrl}
-                alt={reel.creatorName || "Creator"}
-                width={48}
-                height={48}
-                className="h-12 w-12 rounded-full object-cover ring-1 ring-white/20"
-              />
-            ) : (
-              <div className="h-12 w-12 rounded-full bg-white/10" />
-            )}
+            <Image
+              src={avatarUrl}
+              alt={displayName}
+              width={48}
+              height={48}
+              className="h-12 w-12 rounded-full object-cover ring-1 ring-white/20"
+              unoptimized={isAnonymous}
+            />
             <div className="flex flex-col">
               <span className="font-tape text-sm tracking-[0.15em] uppercase text-white">
-                {reel.creatorName || "Tape Members"}
+                {displayName}
               </span>
-              <span className="text-xs font-light text-white/60">
-                shared a reel
-              </span>
+              {!isAnonymous && (
+                <span className="text-xs font-light text-white/60">
+                  shared a reel
+                </span>
+              )}
             </div>
           </div>
 
@@ -121,6 +131,13 @@ export default async function ReelSharePage({
     </main>
   );
 }
+
+// Tape London logo served from Firebase Storage — same asset the
+// Flutter app uses as its fallback creator avatar. Kept here as a
+// top-level const so both the page body and the OG metadata can
+// reference it without duplicating the URL.
+const TAPE_LOGO_URL =
+  "https://firebasestorage.googleapis.com/v0/b/tape-members.appspot.com/o/appui%2Ftape%20london%20logo.png?alt=media&token=0dcad8c4-610f-4fb3-9675-131fef579cac";
 
 /**
  * Server-rendered OG tags — the reason this page is Next.js and
@@ -157,9 +174,11 @@ export async function generateMetadata({
   }
 
   const title = reel.caption || "Watch on Tape Members";
-  const description = reel.creatorName
-    ? `by ${reel.creatorName} · Tape Members`
-    : "Tape Members";
+  const isAnonymous =
+    !reel.creatorName || reel.creatorName.trim().toLowerCase() === "anonymous";
+  const description = isAnonymous
+    ? "A moment from Tape London"
+    : `by ${reel.creatorName} · Tape Members`;
 
   return {
     title,
