@@ -31,11 +31,19 @@ export async function GET() {
           // ID here if it changes in the app's Xcode project.
           appID: "SQL7J6AUPH.branded.io.editorx.vortexinnovationsl",
           paths: [
-            // Only the /r/* share-link path is deep-linked. Other
-            // routes (landing, getTheApp, admin) stay in the
-            // browser so members can still see the web pages when
-            // they want to. `NOT ` prefix excludes paths.
+            // Reel share links — open in the app when installed.
             "/r/*",
+            // Drink bar QR landing — every printed bar QR encodes
+            // https://tapemembers.com/db/<barId>. Universal Link
+            // hands the URL to the app's /db/:barId route which
+            // writes a `drinkBarSessionClaims/{}` doc; web fallback
+            // (this site) renders an install CTA when the app
+            // isn't installed.
+            "/db/*",
+            // Other routes (landing, getTheApp, admin, privacy-
+            // policy, delete-account) stay in the browser so
+            // members can see the web pages when they want to.
+            // `NOT ` prefix excludes paths.
           ],
         },
       ],
