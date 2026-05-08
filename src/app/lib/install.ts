@@ -34,13 +34,6 @@ const APP_STORE_URL =
 const PLAY_STORE_URL =
   "https://play.google.com/store/apps/details?id=branded.io.editorx.vortexinnovationsl";
 
-// Branch key — same one used by the Flutter app's generate_referral_url
-// custom action. Live key, OK to expose in client bundles (it's the
-// public API key, not the secret). Confirmed by inspection of
-// lib/custom_code/actions/generate_referral_url.dart in the Flutter
-// repo.
-const BRANCH_KEY = "key_live_lyrdAo1GQ1fDhbRLYoEllbgmDyf2NLSf";
-
 /**
  * Build a Branch long-form URL that:
  *   - Opens the Tape app directly if installed (Universal Link
@@ -55,9 +48,28 @@ const BRANCH_KEY = "key_live_lyrdAo1GQ1fDhbRLYoEllbgmDyf2NLSf";
  * platform direct-store URL params below are fallbacks in case
  * Branch is unreachable.
  *
- * Long-form URLs don't need a server round-trip to create — Branch
- * accepts arbitrary metadata as querystring params and handles the
- * short-link-style behaviour. See
+ * URL FORMAT (May 8, 2026 — fix for "Invalid request. Invalid
+ * branch uri Unsupported branch uri." error reported on
+ * tapemembers.com):
+ *
+ *   Pre-fix used `https://<subdomain>.app.link/a/<BRANCH_KEY>?<params>`.
+ *   The `/a/<KEY>` path is Branch's internal v1 API endpoint —
+ *   not a browser-clickable URL. Clicking it shows the "Invalid
+ *   request" error page because Branch expects the data as a
+ *   `data=<json>` parameter for that endpoint, not as flat query
+ *   strings.
+ *
+ *   The proper long-link format for browser clicks on a
+ *   `<subdomain>.app.link` URL is:
+ *       https://<subdomain>.app.link/?<params>
+ *   The subdomain itself identifies the Branch app — no
+ *   `branch_key` needed in the URL. Branch's server reads the
+ *   query params (control + custom data) and routes to the
+ *   right store / app.
+ *
+ * Long-form URLs don't need a server round-trip to create —
+ * Branch accepts arbitrary metadata as querystring params and
+ * handles the short-link-style behaviour. See
  * https://help.branch.io/developers-hub/docs/creating-a-deep-link#long-links
  */
 export function buildStoreRedirectUrl(
@@ -75,5 +87,5 @@ export function buildStoreRedirectUrl(
   params.set("$ios_url", APP_STORE_URL);
   params.set("$android_url", PLAY_STORE_URL);
   params.set("$desktop_url", "https://tapemembers.com/getTheApp");
-  return `https://tapemembers.app.link/a/${BRANCH_KEY}?${params.toString()}`;
+  return `https://tapemembers.app.link/?${params.toString()}`;
 }
