@@ -28,11 +28,35 @@ export function detectPlatform(userAgent: string): Platform {
 
 // Direct App Store / Play Store URLs — used as `$ios_url` / `$android_url`
 // on the Branch long-form link so the final redirect target is
-// correct even if Branch is slow to respond.
-const APP_STORE_URL =
+// correct even if Branch is slow to respond. Also exported and
+// used directly as the desktop badge target (see
+// `desktopStoreUrl`) so the badges on a desktop browser open the
+// store page directly instead of bouncing through Branch's
+// $desktop_url redirect — which lands on /getTheApp and creates
+// a confusing same-page-back loop.
+export const APP_STORE_URL =
   "https://apps.apple.com/gb/app/tape-members/id1665221388";
-const PLAY_STORE_URL =
+export const PLAY_STORE_URL =
   "https://play.google.com/store/apps/details?id=branded.io.editorx.vortexinnovationsl";
+
+/**
+ * Direct store URL for desktop clicks — bypasses Branch entirely.
+ * Reasoning: Branch's value-add is mobile install attribution
+ * (Universal Link → app, or fingerprint-based attribution after
+ * App Store install). On desktop neither applies — clicking a
+ * store badge on a Mac opens the web App Store page (or the
+ * native App Store app on macOS), and Branch's desktop redirect
+ * pattern just sends you to `$desktop_url` which we'd configured
+ * as /getTheApp (a page that ALSO has the same install badges,
+ * creating a click-loop). Going direct skips the bounce.
+ *
+ * (May 8, 2026 — fix for "the link just doesn't redirect when
+ * on a desktop" report. Companion to the long-URL format fix in
+ * the same commit window.)
+ */
+export function desktopStoreUrl(target: "ios" | "android"): string {
+  return target === "ios" ? APP_STORE_URL : PLAY_STORE_URL;
+}
 
 /**
  * Build a Branch long-form URL that:

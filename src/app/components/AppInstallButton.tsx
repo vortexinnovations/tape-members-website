@@ -2,21 +2,34 @@
 
 import Image from "next/image";
 import { useMemo } from "react";
-import { buildStoreRedirectUrl, detectPlatform, type Platform } from "../lib/install";
+import {
+  buildStoreRedirectUrl,
+  desktopStoreUrl,
+  detectPlatform,
+  type Platform,
+} from "../lib/install";
 
 /**
  * Single device-aware install button used on the landing page, the
  * getTheApp page, and the reel share fallback.
  *
  * Behaviour:
- *   - iOS  → one tall "Download on the App Store" badge
- *   - Android → one tall "Get it on Google Play" badge
- *   - Desktop / unknown → both badges side-by-side (nobody installs
- *     a nightclub app on their laptop, so the copy nudges them to
- *     grab a phone instead)
- *
- * The button target is always a Branch link so install attribution
- * works when paired with a reel share (see `buildStoreRedirectUrl`).
+ *   - iOS     → one tall "Download on the App Store" badge whose
+ *               href is the Branch URL — Universal Link tries to
+ *               open the app first, falls back to the App Store
+ *               with install attribution baked in.
+ *   - Android → one tall "Get it on Google Play" badge whose href
+ *               is the Branch URL — same fingerprint-based
+ *               attribution flow.
+ *   - Desktop → both badges side-by-side, but each links DIRECTLY
+ *               to the App Store / Play Store web page. No Branch
+ *               hop because there's no install-attribution win on
+ *               desktop (the click won't lead to a same-device
+ *               install) AND Branch's `$desktop_url` redirect
+ *               just bounces back to /getTheApp creating a
+ *               click-loop. Going direct opens the store
+ *               immediately. (May 8, 2026 — fix for desktop
+ *               "doesn't redirect" report.)
  *
  * Client component because device detection is inherently per-visit —
  * we could SSR it by reading the User-Agent header but that requires
@@ -38,20 +51,28 @@ export default function AppInstallButton({
     return detectPlatform(navigator.userAgent);
   }, []);
 
-  const iosHref = buildStoreRedirectUrl("ios", { reelId, referrer });
-  const androidHref = buildStoreRedirectUrl("android", { reelId, referrer });
-
   if (platform === "ios") {
-    return <StoreBadge kind="ios" href={iosHref} />;
+    return (
+      <StoreBadge
+        kind="ios"
+        href={buildStoreRedirectUrl("ios", { reelId, referrer })}
+      />
+    );
   }
   if (platform === "android") {
-    return <StoreBadge kind="android" href={androidHref} />;
+    return (
+      <StoreBadge
+        kind="android"
+        href={buildStoreRedirectUrl("android", { reelId, referrer })}
+      />
+    );
   }
-  // Desktop / unknown → show both, let the user pick.
+  // Desktop / unknown → show both, link DIRECTLY to the stores.
+  // Branch is bypassed here per the comment above the component.
   return (
     <div className="flex flex-col items-center gap-4 sm:flex-row sm:gap-6">
-      <StoreBadge kind="ios" href={iosHref} />
-      <StoreBadge kind="android" href={androidHref} />
+      <StoreBadge kind="ios" href={desktopStoreUrl("ios")} />
+      <StoreBadge kind="android" href={desktopStoreUrl("android")} />
     </div>
   );
 }
