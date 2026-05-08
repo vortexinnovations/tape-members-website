@@ -81,21 +81,32 @@ function DesktopInstallBlock({
   reelId?: string;
   referrer?: string;
 }) {
-  // QR encodes the Branch URL with a distinct `qr_desktop` channel
-  // so scans are analyzable separately from in-app share clicks.
-  // Same `$ios_url` / `$android_url` / `$desktop_url` payload —
-  // when the destination device's UA is mobile, Branch routes to
-  // the right store + attributes the install.
-  const qrHref = useMemo(
-    () =>
-      buildStoreRedirectUrl("ios", {
-        reelId,
-        referrer,
-        channel: "qr_desktop",
-        feature: "install_qr",
-      }),
-    [reelId, referrer],
-  );
+  // QR encodes the SHORT redirect URL `tapemembers.com/i` (~25
+  // chars) instead of the full Branch long URL (~330 chars)
+  // because long-URL QR codes get visually dense — small modules
+  // + the centre logo cutout make scanning unreliable on phone
+  // cameras. The /i endpoint 302s to the same Branch URL the
+  // mobile badges use, preserving the install-attribution chain.
+  // (May 8, 2026 — fix for "the QR code has so much detail" UX
+  // report.)
+  //
+  // Attribution rides along on `?ref` / `?u`:
+  //   - ref → reelId (when on a reel-share fallback page)
+  //   - u   → referrer (when a sharer is attached)
+  // Without those params the QR is just `https://tapemembers.com/i`
+  // — minimum-density QR (~12 modules per side at error level M).
+  const qrHref = useMemo(() => {
+    // Construct relative to the deployed origin so dev/preview
+    // builds work without hardcoding the production domain.
+    const origin =
+        typeof window !== "undefined" ? window.location.origin :
+            "https://tapemembers.com";
+    const params = new URLSearchParams();
+    if (reelId) params.set("ref", reelId);
+    if (referrer) params.set("u", referrer);
+    const qs = params.toString();
+    return qs ? `${origin}/i?${qs}` : `${origin}/i`;
+  }, [reelId, referrer]);
   return (
     <div className="flex flex-col items-center gap-5">
       {/* QR code — primary desktop affordance. */}
@@ -104,15 +115,17 @@ function DesktopInstallBlock({
           value={qrHref}
           size={180}
           // Embed the Tape mark in the centre so the code looks
-          // intentional, not bot-like. ECC level H gives ~30%
-          // damage tolerance which covers the centre logo cutout.
+          // intentional, not bot-like. ECC level M (~15% damage
+          // tolerance) — the short URL is small enough that we
+          // don't need level H's heavier redundancy, which lets
+          // the modules grow larger and keeps the scan reliable.
           imageSettings={{
             src: "/icon.png",
             height: 36,
             width: 36,
             excavate: true,
           }}
-          level="H"
+          level="M"
         />
       </div>
       <p className="text-sm font-light text-white/80 sm:text-base">
