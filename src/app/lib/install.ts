@@ -101,11 +101,21 @@ export function buildStoreRedirectUrl(
   // redirect decision server-side. The channel/feature tags below
   // are what split analytics per button type.
   _targetHint: "ios" | "android",
-  opts: { reelId?: string; referrer?: string } = {},
+  opts: {
+    reelId?: string;
+    referrer?: string;
+    /// Optional channel override for analytics — defaults to
+    /// `web-install`. Set to `qr_desktop` for the QR-code-on-
+    /// desktop flow so scans show up as a separate funnel in
+    /// Branch dashboards (different conversion shape — the
+    /// scanner wasn't on the install page in the first place).
+    channel?: string;
+    feature?: string;
+  } = {},
 ): string {
   const params = new URLSearchParams();
-  params.set("~channel", "web-install");
-  params.set("~feature", "reel_share");
+  params.set("~channel", opts.channel ?? "web-install");
+  params.set("~feature", opts.feature ?? "reel_share");
   if (opts.reelId) params.set("reelRef", opts.reelId);
   if (opts.referrer) params.set("referrer", opts.referrer);
   params.set("$ios_url", APP_STORE_URL);
