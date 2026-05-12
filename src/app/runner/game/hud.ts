@@ -27,6 +27,11 @@ export class HUD {
   private flashEl: HTMLDivElement;
   private flashTimer: number | null = null;
   private comboFadeTimer: number | null = null;
+  // Cached values for the combined subline ("1234m · 12 m/s"). We
+  // accept distance + speed via separate setters but render them
+  // together so the HUD only mutates one DOM node.
+  private subDistance = 0;
+  private subSpeed = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     const parent = canvas.parentElement ?? document.body;
@@ -118,7 +123,7 @@ export class HUD {
       opacity: '0.55',
       fontVariantNumeric: 'tabular-nums',
     } satisfies Partial<CSSStyleDeclaration>);
-    this.distEl.textContent = '0m';
+    this.distEl.textContent = '0m · 0 m/s';
     scoreCol.appendChild(this.distEl);
     topRow.appendChild(scoreCol);
 
@@ -185,7 +190,20 @@ export class HUD {
   }
 
   setDistance(n: number) {
-    this.distEl.textContent = `${formatInt(n)}m`;
+    this.subDistance = n;
+    this.renderSubline();
+  }
+
+  /** Current m/s — surfaces in the score-column subline alongside
+   *  distance ("1234m · 12 m/s"). */
+  setSpeed(mps: number) {
+    this.subSpeed = mps;
+    this.renderSubline();
+  }
+
+  private renderSubline() {
+    this.distEl.textContent =
+      `${formatInt(this.subDistance)}m · ${this.subSpeed.toFixed(0)} m/s`;
   }
 
   setBuzz(level: number) {

@@ -468,6 +468,7 @@ export class RunnerGame {
     // ── HUD updates (cheap, per-frame) ────────────────────────
     this.hud.setScore(this.score);
     this.hud.setDistance(this.distance);
+    this.hud.setSpeed(this.speed);
     this.hud.setBuzz(this.buzz.getLevel());
     this.hud.setVignette(buzzFx.vignette);
     // Combo HUD is set inside collectPickup() — the timed fade
