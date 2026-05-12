@@ -61,7 +61,7 @@ export default function RunnerPage() {
     // Tell Flutter we're ready to receive init. Flutter waits on
     // this before pushing user settings — avoids a race where
     // settings arrive before the game class exists.
-    postToFlutter({ type: 'ready', version: 1 });
+    postToFlutter({ type: 'ready', version: 2 });
 
     return () => {
       game.dispose();

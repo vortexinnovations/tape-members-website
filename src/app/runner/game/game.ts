@@ -1,44 +1,63 @@
-// Tape Runner — Three.js game class (spike / placeholder content).
+// Tape Runner — Three.js game.
 //
-// Scope of THIS commit: prove the end-to-end architecture by
-// rendering a minimal-but-functional 3-lane runner with cube
-// obstacles. The art is intentionally placeholder — once the
-// bridge + Flutter integration is verified, subsequent commits
-// swap in real Mixamo characters, GLB obstacle models, audio,
-// particles, post-processing, etc.
+// Nightclub-themed endless runner. Core loop:
+//   - Collect bottles (water, vodka, champagne, magnum, methuselah)
+//     to rack up score × combo multiplier.
+//   - Bottles raise your BUZZ meter; water drops it.
+//   - Buzz adds visual + mechanical penalties: vignette, screen
+//     blur, camera sway, FOV tunnel, slower lane changes.
+//   - Buzz 5 = BLACKOUT = game over.
+//   - Speakers + bouncers = run-over = game over.
 //
-// Render frame:
-//   - Top-down-ish perspective camera behind & above the player
-//   - Floor extends into the distance (negative Z)
-//   - Player is a copper rounded box on lane 1 (centre)
-//   - Obstacles spawn at z = SPAWN_Z and translate toward camera
-//     (positive Z) at the current speed
-//   - Game ends on collision; gameOver message posted to Flutter
+// Detailed design lives in CLAUDE.md ("Tape Runner game design"
+// May 13, 2026 entry — not yet written; for now see the conversation
+// log + this file). All numeric tuning lives in `tuning.ts`.
 //
 // Coordinate convention:
-//   +X = right    -X = left
-//   +Y = up
-//   +Z = toward camera (the player runs in -Z direction
-//        conceptually; in practice the world scrolls in +Z
-//        past the player, who stays put)
+//   +X right, -X left
+//   +Y up
+//   +Z toward camera — the player stays still and the world
+//   scrolls +Z past them.
 
 import * as THREE from 'three';
+
 import {
   postToFlutter,
+  type GameOverMessage,
   type InitPayload,
   type PlayerGender,
 } from './bridge';
+import { Buzz } from './buzz';
+import { HUD } from './hud';
+import {
+  COMBO,
+  comboMultiplier,
+  LANES,
+  OBSTACLES,
+  PICKUPS,
+  PLAYER,
+  rollObstacle,
+  rollPickup,
+  SPAWN,
+  WORLD,
+  type ObstacleSpec,
+  type PickupSpec,
+} from './tuning';
 
-// ── Tunables (defaults — admin values override on init) ───────────
-const LANE_X = [-2.4, 0, 2.4] as const;
-const PLAYER_BASE_Y = 1;
-const PLAYER_JUMP_VY = 8.0; // initial upward velocity
-const GRAVITY = -18.0;
-const SPAWN_Z = -70;
-const DESPAWN_Z = 8;
-const LANE_CHANGE_DURATION = 0.18; // seconds
-const SPAWN_INTERVAL_BASE = 1.4; // seconds at base speed
-const COLLISION_PADDING = 0.85; // tighter than visual bbox for fairness
+// ── Internal entities ─────────────────────────────────────────────
+
+interface ActivePickup {
+  mesh: THREE.Mesh;
+  spec: PickupSpec;
+  /** Set true once the player has either collected OR passed it.
+   *  Pickups passed without collection BREAK the combo. */
+  resolved: boolean;
+}
+
+interface ActiveObstacle {
+  mesh: THREE.Mesh;
+  spec: ObstacleSpec;
+}
 
 // ── Game class ─────────────────────────────────────────────────────
 
@@ -49,36 +68,47 @@ export class RunnerGame {
   private renderer: THREE.WebGLRenderer;
   private clock = new THREE.Clock();
   private resizeObserver: ResizeObserver | null = null;
+  private baseFov = 55;
 
   // Player + lane state
   private player!: THREE.Mesh;
   private playerLane = 1;
   // Explicit `number` annotations — without them TS infers the
-  // literal type `0` from LANE_X[1] (because LANE_X is `as const`)
+  // literal type `0` from LANE_X[1] (because LANES.X is `as const`)
   // and rejects later assignment from -2.4 / +2.4 lanes.
-  private targetX: number = LANE_X[1];
+  private targetX: number = LANES.X[1];
   private laneChangeTime = 0;
-  private laneChangeStartX: number = LANE_X[1];
-  private playerY = PLAYER_BASE_Y;
+  private laneChangeStartX: number = LANES.X[1];
+  private laneChangeDuration = PLAYER.LANE_CHANGE_BASE_S;
+  private playerY = PLAYER.BASE_Y;
   private playerVy = 0;
 
-  // Obstacle pool — simple cubes for the spike.
-  private obstacles: THREE.Mesh[] = [];
-  private spawnAccumulator = 0;
-
-  // Floor stripes — give the player a sense of motion.
+  // World
   private floorStripes: THREE.Mesh[] = [];
+  private pickups: ActivePickup[] = [];
+  private obstacles: ActiveObstacle[] = [];
+  private spawnAccumPickup = 0;
+  private spawnAccumObstacle = 0;
 
-  // Game state
-  private speed = 10;
-  private startSpeed = 10;
-  private maxSpeed = 22;
-  private speedRamp = 0.01;
+  // HUD overlay (DOM) — created on construction, owns vignette + counters.
+  private hud: HUD;
+
+  // Buzz + combo + score state
+  private buzz = new Buzz();
+  private score = 0;
+  private bottlesCollected = 0;
+  private watersUsed = 0;
+  private combo = 0;
+  private comboTimer = 0;
+  private peakCombo = 0;
+
+  // World state
+  private speed = WORLD.START_SPEED;
+  private startSpeed = WORLD.START_SPEED;
+  private maxSpeed = WORLD.MAX_SPEED;
+  private speedRamp = WORLD.SPEED_RAMP;
   private distance = 0;
   private duration = 0;
-  private hits = 0;
-  private water = 0;
-  private coins = 0;
 
   private running = true;
   private gameOver = false;
@@ -103,7 +133,7 @@ export class RunnerGame {
     this.resize();
 
     this.camera = new THREE.PerspectiveCamera(
-      55,
+      this.baseFov,
       this.aspect(),
       0.1,
       200,
@@ -112,6 +142,7 @@ export class RunnerGame {
     this.camera.lookAt(0, 1, -6);
 
     this.buildScene();
+    this.hud = new HUD(canvas);
     this.attachInput();
     this.attachResize();
     this.start();
@@ -132,13 +163,13 @@ export class RunnerGame {
   // ── Scene build ─────────────────────────────────────────────────
 
   private buildScene() {
-    // Lighting — one directional + ambient. Cheap and reads well.
+    // Lighting — one directional + ambient + a magenta rim for
+    // mild nightclub mood. Cheap, no shadows.
     const ambient = new THREE.AmbientLight(0xffffff, 0.45);
     this.scene.add(ambient);
     const dir = new THREE.DirectionalLight(0xffffff, 0.85);
     dir.position.set(2, 10, 4);
     this.scene.add(dir);
-    // Faint magenta rim light to suggest nightclub ambience.
     const rim = new THREE.DirectionalLight(0xc34a8e, 0.35);
     rim.position.set(-4, 6, -8);
     this.scene.add(rim);
@@ -154,8 +185,7 @@ export class RunnerGame {
     ground.position.z = -90;
     this.scene.add(ground);
 
-    // Lane separator strips. Slightly raised so they don't z-fight
-    // with the ground.
+    // Lane separators — vertical white strips between lanes.
     const laneStripeGeo = new THREE.PlaneGeometry(0.06, 200);
     const laneStripeMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -169,8 +199,8 @@ export class RunnerGame {
       this.scene.add(stripe);
     });
 
-    // Floor stripes — short bright bars that translate +Z each
-    // frame to give a strong motion cue. Recycled in a small pool.
+    // Floor stripes — short bars that translate +Z each frame to
+    // give a strong motion cue. Recycled in a small pool.
     const stripeGeo = new THREE.PlaneGeometry(7.2, 0.18);
     const stripeMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -186,15 +216,19 @@ export class RunnerGame {
     }
 
     // Player — placeholder rounded box. Real character (Mixamo
-    // GLB with run animation) comes in the next commit.
-    const playerGeo = new THREE.BoxGeometry(1.0, 1.8, 0.6);
+    // GLB with run animation) comes in a later commit.
+    const playerGeo = new THREE.BoxGeometry(
+      PLAYER.WIDTH,
+      PLAYER.HEIGHT,
+      PLAYER.DEPTH,
+    );
     const playerMat = new THREE.MeshStandardMaterial({
       color: 0xb87333,
       roughness: 0.5,
       metalness: 0.05,
     });
     this.player = new THREE.Mesh(playerGeo, playerMat);
-    this.player.position.set(LANE_X[1], PLAYER_BASE_Y, 0);
+    this.player.position.set(LANES.X[1], PLAYER.BASE_Y, 0);
     this.scene.add(this.player);
   }
 
@@ -205,8 +239,6 @@ export class RunnerGame {
   private static MIN_SWIPE = 30;
 
   private attachInput() {
-    // Touch / mouse — single pointer handling, follows the same
-    // dominant-axis swipe rule the Flame version uses.
     this.canvas.addEventListener('pointerdown', (e) => {
       this.swipeStart = { x: e.clientX, y: e.clientY };
       this.swipeCommitted = false;
@@ -218,11 +250,13 @@ export class RunnerGame {
       const ax = Math.abs(dx);
       const ay = Math.abs(dy);
       if (ax > ay && ax > RunnerGame.MIN_SWIPE) {
-        dx < 0 ? this.swipeLeft() : this.swipeRight();
+        if (dx < 0) this.swipeLeft();
+        else this.swipeRight();
         this.swipeCommitted = true;
       } else if (ay > ax && ay > RunnerGame.MIN_SWIPE) {
         if (dy < 0) this.jump();
-        // (slide on swipe down — wired in next commit)
+        // (slide on swipe down — wired in next commit alongside
+        // duck-under obstacles like a low-hanging disco ball)
         this.swipeCommitted = true;
       }
     });
@@ -240,7 +274,8 @@ export class RunnerGame {
       if (this.gameOver) return;
       if (e.key === 'ArrowLeft' || e.key === 'a') this.swipeLeft();
       else if (e.key === 'ArrowRight' || e.key === 'd') this.swipeRight();
-      else if (e.key === 'ArrowUp' || e.key === ' ' || e.key === 'w') this.jump();
+      else if (e.key === 'ArrowUp' || e.key === ' ' || e.key === 'w')
+        this.jump();
     });
   }
 
@@ -263,18 +298,24 @@ export class RunnerGame {
   }
   private swipeRight() {
     if (this.gameOver || !this.running) return;
-    if (this.playerLane < LANE_X.length - 1) this.setLane(this.playerLane + 1);
+    if (this.playerLane < LANES.X.length - 1)
+      this.setLane(this.playerLane + 1);
   }
   private setLane(lane: number) {
     this.playerLane = lane;
     this.laneChangeStartX = this.player.position.x;
-    this.targetX = LANE_X[lane];
+    this.targetX = LANES.X[lane];
     this.laneChangeTime = 0;
+    // Capture the effective duration now so buzz changes mid-swipe
+    // don't suddenly speed-warp the player. Duration is the buzz-
+    // scaled base value (slower at high buzz).
+    const slow = this.buzz.getInterpolatedEffectParams().laneSlowFactor;
+    this.laneChangeDuration = PLAYER.LANE_CHANGE_BASE_S * slow;
   }
   private jump() {
     if (this.gameOver || !this.running) return;
-    if (this.playerY > PLAYER_BASE_Y + 0.05) return; // already airborne
-    this.playerVy = PLAYER_JUMP_VY;
+    if (this.playerY > PLAYER.BASE_Y + 0.05) return; // already airborne
+    this.playerVy = PLAYER.JUMP_VY;
   }
 
   // ── Game loop ───────────────────────────────────────────────────
@@ -293,21 +334,46 @@ export class RunnerGame {
   private update(dt: number) {
     if (this.gameOver) return;
 
-    // Speed curve — same shape as the Flame version.
+    // ── World scroll + speed curve ────────────────────────────
     this.speed = Math.min(
       this.maxSpeed,
       this.startSpeed + this.distance * this.speedRamp,
     );
     this.distance += this.speed * dt;
     this.duration += dt;
+    const scroll = this.speed * dt;
+    // Distance contributes 1 pt/m to the score baseline.
+    this.score += this.speed * dt;
 
-    // Lane interpolation (eased) — moves player.position.x from
-    // laneChangeStartX toward targetX over LANE_CHANGE_DURATION.
-    if (this.laneChangeTime < LANE_CHANGE_DURATION) {
+    // ── Buzz tick (decay + blackout check) ────────────────────
+    this.buzz.tickDecay(dt);
+    if (this.buzz.isBlackout()) {
+      this.endGame('blackout');
+      return;
+    }
+    const buzzFx = this.buzz.getInterpolatedEffectParams();
+
+    // ── Apply buzz visual effects to camera + canvas ──────────
+    // Camera sway: oscillate Z-roll at ~0.8 Hz scaled by amplitude.
+    const swayPhase = this.duration * 0.8 * Math.PI * 2;
+    const swayDeg = this.reduceMotion ? 0 : buzzFx.sway;
+    this.camera.rotation.z = (Math.sin(swayPhase) * swayDeg * Math.PI) / 180;
+    // FOV tunnel — slight FOV increase at high buzz reads as
+    // "the world closing in." Update projection matrix on change.
+    const targetFov = this.baseFov + buzzFx.fovOffset;
+    if (Math.abs(this.camera.fov - targetFov) > 0.01) {
+      this.camera.fov = targetFov;
+      this.camera.updateProjectionMatrix();
+    }
+    // Canvas CSS blur — cheap and effective.
+    const blurPx = this.reduceMotion ? 0 : buzzFx.blur;
+    this.canvas.style.filter = blurPx > 0 ? `blur(${blurPx.toFixed(2)}px)` : '';
+
+    // ── Lane interpolation (eased) ────────────────────────────
+    if (this.laneChangeTime < this.laneChangeDuration) {
       this.laneChangeTime += dt;
-      const t = Math.min(1, this.laneChangeTime / LANE_CHANGE_DURATION);
-      // ease-out cubic
-      const eased = 1 - Math.pow(1 - t, 3);
+      const t = Math.min(1, this.laneChangeTime / this.laneChangeDuration);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
       this.player.position.x =
         this.laneChangeStartX +
         (this.targetX - this.laneChangeStartX) * eased;
@@ -315,86 +381,215 @@ export class RunnerGame {
       this.player.position.x = this.targetX;
     }
 
-    // Jump arc — simple Euler integration with gravity.
-    if (this.playerY > PLAYER_BASE_Y || this.playerVy !== 0) {
-      this.playerVy += GRAVITY * dt;
+    // ── Jump arc + run-bob ────────────────────────────────────
+    if (this.playerY > PLAYER.BASE_Y || this.playerVy !== 0) {
+      this.playerVy += PLAYER.GRAVITY * dt;
       this.playerY += this.playerVy * dt;
-      if (this.playerY <= PLAYER_BASE_Y) {
-        this.playerY = PLAYER_BASE_Y;
+      if (this.playerY <= PLAYER.BASE_Y) {
+        this.playerY = PLAYER.BASE_Y;
         this.playerVy = 0;
       }
       this.player.position.y = this.playerY;
     }
-
-    // Run-bob — small Y oscillation while grounded.
-    if (this.playerY <= PLAYER_BASE_Y + 0.01) {
+    if (this.playerY <= PLAYER.BASE_Y + 0.01) {
       const bobPhase = this.duration * (this.speed / this.startSpeed) * 8;
       this.player.position.y =
-        PLAYER_BASE_Y + Math.sin(bobPhase) * 0.07;
+        PLAYER.BASE_Y + Math.sin(bobPhase) * 0.07;
     }
 
-    // Scroll the floor stripes.
-    const scroll = this.speed * dt;
+    // ── Scroll floor stripes ──────────────────────────────────
     for (const s of this.floorStripes) {
       s.position.z += scroll;
       if (s.position.z > 4) s.position.z -= 90;
     }
 
-    // Scroll obstacles + check collisions + despawn.
+    // ── Scroll pickups, check collection / pass ────────────────
+    for (let i = this.pickups.length - 1; i >= 0; i--) {
+      const p = this.pickups[i];
+      p.mesh.position.z += scroll;
+      // Gentle pickup rotation for visual interest.
+      p.mesh.rotation.y += dt * 1.6;
+
+      if (!p.resolved && this.intersectsPlayer(p.mesh, 0.6)) {
+        this.collectPickup(p);
+        p.resolved = true;
+      }
+      if (p.mesh.position.z > WORLD.DESPAWN_Z) {
+        // If we passed it without collecting, the combo breaks.
+        if (!p.resolved && p.spec.kind !== 'water') {
+          this.breakCombo();
+        }
+        this.scene.remove(p.mesh);
+        this.disposeMesh(p.mesh);
+        this.pickups.splice(i, 1);
+      }
+    }
+
+    // ── Scroll obstacles, check collisions ────────────────────
     for (let i = this.obstacles.length - 1; i >= 0; i--) {
       const o = this.obstacles[i];
-      o.position.z += scroll;
-      if (o.position.z > DESPAWN_Z) {
-        this.scene.remove(o);
+      o.mesh.position.z += scroll;
+      if (o.mesh.position.z > WORLD.DESPAWN_Z) {
+        this.scene.remove(o.mesh);
+        this.disposeMesh(o.mesh);
         this.obstacles.splice(i, 1);
         continue;
       }
-      if (this.intersectsPlayer(o)) {
-        this.endGame('blackout');
+      if (this.intersectsPlayer(o.mesh, 1.0)) {
+        this.endGame(o.spec.failReason);
         return;
       }
     }
 
-    // Spawner — drops obstacles at SPAWN_Z in a random lane.
-    this.spawnAccumulator += dt;
-    const interval =
-        SPAWN_INTERVAL_BASE * (this.startSpeed / this.speed);
-    if (this.spawnAccumulator >= interval) {
-      this.spawnAccumulator = 0;
+    // ── Combo expiry ──────────────────────────────────────────
+    if (this.combo > 0) {
+      this.comboTimer += dt;
+      if (this.comboTimer >= COMBO.WINDOW_S) {
+        this.breakCombo();
+      }
+    }
+
+    // ── Spawn pickups + obstacles ─────────────────────────────
+    this.spawnAccumPickup += dt;
+    this.spawnAccumObstacle += dt;
+    const pickupInterval =
+      SPAWN.PICKUP_INTERVAL_BASE_S * (this.startSpeed / this.speed);
+    const obstacleInterval =
+      SPAWN.OBSTACLE_INTERVAL_BASE_S * (this.startSpeed / this.speed);
+    if (this.spawnAccumPickup >= pickupInterval) {
+      this.spawnAccumPickup = 0;
+      this.spawnPickup();
+    }
+    if (this.spawnAccumObstacle >= obstacleInterval) {
+      this.spawnAccumObstacle = 0;
       this.spawnObstacle();
     }
+
+    // ── HUD updates (cheap, per-frame) ────────────────────────
+    this.hud.setScore(this.score);
+    this.hud.setDistance(this.distance);
+    this.hud.setBuzz(this.buzz.getLevel());
+    this.hud.setVignette(buzzFx.vignette);
+    // Combo HUD is set inside collectPickup() — the timed fade
+    // happens via the HUD's internal timer, so we don't re-set
+    // here every frame.
+  }
+
+  // ── Spawning ────────────────────────────────────────────────────
+
+  private spawnPickup() {
+    const spec = rollPickup();
+    const geo = new THREE.CylinderGeometry(
+      spec.radius,
+      spec.radius * 0.9,
+      spec.height,
+      14,
+    );
+    const mat = new THREE.MeshStandardMaterial({
+      color: spec.color,
+      roughness: 0.35,
+      metalness: 0.1,
+      emissive: spec.color,
+      emissiveIntensity: spec.kind === 'methuselah' ? 0.35 : 0.12,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    const lane = Math.floor(Math.random() * LANES.X.length);
+    mesh.position.set(LANES.X[lane], spec.height / 2 + 0.15, WORLD.SPAWN_Z);
+    this.scene.add(mesh);
+    this.pickups.push({ mesh, spec, resolved: false });
   }
 
   private spawnObstacle() {
-    const geo = new THREE.BoxGeometry(0.9, 1.6, 0.6);
+    const spec = rollObstacle();
+    const geo = new THREE.BoxGeometry(spec.width, spec.height, spec.depth);
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x1f4d2a,
+      color: spec.color,
       roughness: 0.4,
+      metalness: spec.kind === 'speaker' ? 0.3 : 0.05,
     });
-    const o = new THREE.Mesh(geo, mat);
-    const lane = Math.floor(Math.random() * LANE_X.length);
-    o.position.set(LANE_X[lane], 0.8, SPAWN_Z);
-    this.scene.add(o);
-    this.obstacles.push(o);
+    const mesh = new THREE.Mesh(geo, mat);
+    const lane = Math.floor(Math.random() * LANES.X.length);
+    mesh.position.set(LANES.X[lane], spec.height / 2, WORLD.SPAWN_Z);
+    this.scene.add(mesh);
+    this.obstacles.push({ mesh, spec });
   }
 
-  private intersectsPlayer(o: THREE.Mesh): boolean {
-    // AABB on X+Z (Y collision skipped — jumping clears any
-    // obstacle at the current spike's heights).
-    const oGeo = o.geometry as THREE.BoxGeometry;
-    const pGeo = this.player.geometry as THREE.BoxGeometry;
-    const oHalfX = (oGeo.parameters.width / 2) * COLLISION_PADDING;
-    const oHalfZ = (oGeo.parameters.depth / 2) * COLLISION_PADDING;
-    const pHalfX = (pGeo.parameters.width / 2) * COLLISION_PADDING;
-    const pHalfZ = (pGeo.parameters.depth / 2) * COLLISION_PADDING;
-    const dx = Math.abs(o.position.x - this.player.position.x);
-    const dz = Math.abs(o.position.z - this.player.position.z);
-    if (dx > oHalfX + pHalfX) return false;
-    if (dz > oHalfZ + pHalfZ) return false;
-    // Y check — only collide if player is grounded or low in jump.
+  // ── Pickup collection ─────────────────────────────────────────
+
+  private collectPickup(p: ActivePickup) {
+    const spec = p.spec;
+    if (spec.kind === 'water') {
+      this.buzz.add(spec.buzzDelta); // -1
+      this.watersUsed++;
+      // Water doesn't extend combo (no score from it).
+      this.hud.flashPickup(spec, 0);
+    } else {
+      // Combo bump + score with multiplier.
+      this.combo++;
+      this.peakCombo = Math.max(this.peakCombo, this.combo);
+      this.comboTimer = 0;
+      const mult = comboMultiplier(this.combo);
+      const earned = Math.round(spec.score * mult);
+      this.score += earned;
+      this.buzz.add(spec.buzzDelta);
+      this.bottlesCollected++;
+      this.hud.flashPickup(spec, earned);
+      this.hud.setCombo(this.combo, mult);
+    }
+    // Hide the mesh immediately on collection so the player feels
+    // the take. We don't bother with a fancy pickup animation in
+    // the spike; the HUD flash does the heavy lifting.
+    p.mesh.visible = false;
+  }
+
+  private breakCombo() {
+    if (this.combo === 0) return;
+    this.combo = 0;
+    this.comboTimer = 0;
+    this.hud.setCombo(0, 1);
+  }
+
+  // ── Collision ─────────────────────────────────────────────────
+
+  /**
+   * AABB collision check on X+Z, with a Y gate so jumping clears
+   * floor-level obstacles. `paddingScale` lets pickups (forgiving)
+   * use a wider collision than obstacles (tighter) — better game
+   * feel: bottles are easy to grab, speakers are easy to dodge.
+   */
+  private intersectsPlayer(mesh: THREE.Mesh, paddingScale: number): boolean {
+    const oGeo = mesh.geometry as
+      | THREE.BoxGeometry
+      | THREE.CylinderGeometry;
+    let halfX: number;
+    let halfZ: number;
+    if (oGeo instanceof THREE.BoxGeometry) {
+      halfX = (oGeo.parameters.width / 2) * WORLD.COLLISION_PADDING;
+      halfZ = (oGeo.parameters.depth / 2) * WORLD.COLLISION_PADDING;
+    } else {
+      // Cylinder — use radius for both X and Z.
+      const r = oGeo.parameters.radiusTop * WORLD.COLLISION_PADDING;
+      halfX = r;
+      halfZ = r;
+    }
+    halfX *= paddingScale;
+    halfZ *= paddingScale;
+    const pHalfX = (PLAYER.WIDTH / 2) * WORLD.COLLISION_PADDING;
+    const pHalfZ = (PLAYER.DEPTH / 2) * WORLD.COLLISION_PADDING;
+    const dx = Math.abs(mesh.position.x - this.player.position.x);
+    const dz = Math.abs(mesh.position.z - this.player.position.z);
+    if (dx > halfX + pHalfX) return false;
+    if (dz > halfZ + pHalfZ) return false;
+    // Y check — only collide if player is on/near the ground.
     if (this.player.position.y > 2.0) return false;
-    this.hits++;
     return true;
+  }
+
+  private disposeMesh(mesh: THREE.Mesh) {
+    mesh.geometry.dispose();
+    const m = mesh.material;
+    if (Array.isArray(m)) m.forEach((mat) => mat.dispose());
+    else m.dispose();
   }
 
   // ── Public bridge surface (called by page.tsx) ────────────────
@@ -412,20 +607,24 @@ export class RunnerGame {
       }
       if (typeof s.maxSpeed === 'number') this.maxSpeed = s.maxSpeed;
       if (typeof s.speedRamp === 'number') this.speedRamp = s.speedRamp;
+      if (typeof s.tipsyDecaySeconds === 'number') {
+        this.buzz.setDecaySeconds(s.tipsyDecaySeconds);
+      }
     }
     postToFlutter({
       type: 'log',
       level: 'info',
       message:
-          `init applied: gender=${this.playerGender} ` +
-          `start=${this.startSpeed} max=${this.maxSpeed} ` +
-          `ramp=${this.speedRamp}`,
+        `init applied: gender=${this.playerGender} ` +
+        `start=${this.startSpeed} max=${this.maxSpeed} ` +
+        `ramp=${this.speedRamp}`,
     });
   }
 
   pause() {
     this.running = false;
   }
+
   resume() {
     if (this.gameOver) return;
     this.clock.getDelta(); // reset delta so resume doesn't ff
@@ -437,17 +636,23 @@ export class RunnerGame {
     if (!this.gameOver) this.endGame('manual');
   }
 
-  private endGame(reason: 'blackout' | 'speakerHit' | 'manual') {
+  private endGame(reason: GameOverMessage['reason']) {
     if (this.gameOver) return;
     this.gameOver = true;
     this.running = false;
+    // Clean up any residual canvas filter so the game-over screen
+    // is crisp.
+    this.canvas.style.filter = '';
     postToFlutter({
       type: 'gameOver',
+      score: Math.floor(this.score),
       distance: Math.floor(this.distance),
       duration: Math.floor(this.duration),
-      hits: this.hits,
-      water: this.water,
-      coins: this.coins,
+      bottlesCollected: this.bottlesCollected,
+      watersUsed: this.watersUsed,
+      peakCombo: this.peakCombo,
+      peakBuzz: this.buzz.getPeak(),
+      speed: this.speed,
       reason,
     });
   }
@@ -456,6 +661,8 @@ export class RunnerGame {
   dispose() {
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     this.resizeObserver?.disconnect();
+    this.canvas.style.filter = '';
+    this.hud.dispose();
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
         obj.geometry.dispose();

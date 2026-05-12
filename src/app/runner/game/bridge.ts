@@ -36,18 +36,39 @@ export type InitPayload = {
 export type ReadyMessage = {
   type: 'ready';
   /** Bump this on incompatible bridge changes. */
-  version: 1;
+  version: 2;
 };
 
-/** Sent from JS to Flutter when a run ends. */
+/**
+ * Sent from JS to Flutter when a run ends.
+ *
+ * v2 (May 13, 2026) — added score + combo + buzz fields to support
+ * the nightclub-runner gameplay (bottle pickups = points × combo
+ * multiplier; buzz meter; bouncer obstacle). The Flutter side
+ * submits `score` as the leaderboard metric (the existing
+ * `distanceMeters` field on `runnerScoreSubmissions` is overloaded
+ * to carry score for WebView-engine runs).
+ */
 export type GameOverMessage = {
   type: 'gameOver';
+  /** Final score — distance + bottle points × combo multipliers. */
+  score: number;
+  /** Raw distance travelled in metres (display + telemetry). */
   distance: number;
+  /** Seconds elapsed. */
   duration: number;
-  hits: number;
-  water: number;
-  coins: number;
-  reason: 'blackout' | 'speakerHit' | 'manual';
+  /** Total bottle pickups (excludes water). */
+  bottlesCollected: number;
+  /** Water pickups consumed. */
+  watersUsed: number;
+  /** Peak combo achieved (1 = no combo, higher = consecutive picks). */
+  peakCombo: number;
+  /** Highest buzz level reached during the run (0..5). */
+  peakBuzz: number;
+  /** Speed at the moment of game-over (m/s). */
+  speed: number;
+  /** Why the run ended. */
+  reason: 'blackout' | 'speakerHit' | 'bouncerHit' | 'manual';
 };
 
 /** Sent from JS to Flutter for debug logging via the bridge. */
