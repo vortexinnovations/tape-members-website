@@ -24,7 +24,6 @@ import {
   GLTFLoader,
   type GLTF,
 } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 import {
@@ -567,23 +566,23 @@ export class RunnerGame {
     // know to bail when this one finishes.
     this.loadedJumpGender = suffix;
     try {
-      const fbx = await new FBXLoader().loadAsync(
-        `/models/runner_jump_${suffix}.fbx`,
+      const gltf = await new GLTFLoader().loadAsync(
+        `/models/runner_jump_${suffix}.glb`,
       );
       // If gender flipped while we were loading, drop this one on
       // the floor — the newer load is in progress, which will
       // settle the readiness flag itself.
       if (this.loadedJumpGender !== suffix) return;
-      const clip = (fbx.animations as THREE.AnimationClip[])?.[0];
+      const clip = gltf.animations[0];
       if (!clip) {
         // eslint-disable-next-line no-console
-        console.debug(`[runner] jump fbx (${suffix}) has no animations`);
+        console.debug(`[runner] jump glb (${suffix}) has no animations`);
         this.loadedJumpGender = '';
         this.jumpAssetReady = true;
         this.checkAssetsReady();
         return;
       }
-      await this.installJumpCharacter(fbx, clip);
+      await this.installJumpCharacter(gltf.scene, clip);
       this.jumpAssetReady = true;
       this.checkAssetsReady();
     } catch (e) {
@@ -1274,36 +1273,21 @@ export class RunnerGame {
    */
   private async tryLoadGltfPlayer(gender: string) {
     const suffix = gender === 'female' ? 'female' : 'male';
-    // FBX first — that's what Mixamo gives you directly, no
-    // conversion step required. GLB as a fallback for anyone who
-    // converts later (smaller files; FBX is ~10-20MB, GLB ~3-5MB).
-    const candidates: Array<{ url: string; format: 'fbx' | 'glb' }> = [
-      { url: `/models/runner_${suffix}.fbx`, format: 'fbx' },
-      { url: `/models/runner_${suffix}.glb`, format: 'glb' },
-    ];
-
+    // Compressed GLB pipeline: Mixamo FBX → FBX2glTF → gltf-transform
+    // resize 1024 + webp. Final files are 17-22× smaller than the
+    // raw Mixamo FBX exports (~3 MB vs ~50 MB) with no visible
+    // quality loss at runtime.
     let scene: THREE.Group | undefined;
     let animations: THREE.AnimationClip[] = [];
-    for (const c of candidates) {
-      try {
-        if (c.format === 'glb') {
-          const gltf: GLTF = await new GLTFLoader().loadAsync(c.url);
-          scene = gltf.scene;
-          animations = gltf.animations;
-        } else {
-          // FBXLoader returns the scene as a Group directly; animations
-          // are on the returned object's `.animations` property.
-          const fbx = await new FBXLoader().loadAsync(c.url);
-          scene = fbx;
-          animations = (fbx.animations as THREE.AnimationClip[]) ?? [];
-        }
-        break; // first one that loads wins
-      } catch (e) {
-        // 404 or parse error — try the next candidate. Expected for
-        // the format the operator didn't drop in.
-        // eslint-disable-next-line no-console
-        console.debug(`[runner] no model at ${c.url}`, e);
-      }
+    try {
+      const gltf: GLTF = await new GLTFLoader().loadAsync(
+        `/models/runner_${suffix}.glb`,
+      );
+      scene = gltf.scene;
+      animations = gltf.animations;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.debug(`[runner] runner_${suffix}.glb load failed`, e);
     }
 
     if (!scene) {

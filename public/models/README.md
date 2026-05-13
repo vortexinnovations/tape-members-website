@@ -1,85 +1,114 @@
 # Tape Runner — Character Models
 
-The Three.js runner game loads its player character from this folder at runtime:
+The Three.js runner game loads its characters from this folder at
+runtime:
 
-- `runner_male.fbx` (or `.glb`) — used when the Flutter app sends `playerGender: 'male'` (default)
-- `runner_female.fbx` (or `.glb`) — used when `playerGender: 'female'`
+| File | Purpose | Size |
+|---|---|---|
+| `runner_male.glb` | Player when `playerGender: 'male'` (default) | ~3 MB |
+| `runner_female.glb` | Player when `playerGender: 'female'` | ~870 KB |
+| `runner_jump_male.glb` | Jump animation character (male) | ~3 MB |
+| `runner_jump_female.glb` | Jump animation character (female) | ~880 KB |
+| `runner_bouncer.glb` | Dancing-bouncer obstacle (shared across all sessions) | ~2.7 MB |
 
-If a file is missing, the game silently falls back to the in-code
-capsule-stack placeholder character. No errors, no broken state —
-the player just sees the simpler silhouette.
+If a player or jump file is missing, the game silently falls back
+to the in-code capsule-stack placeholder character (player) or the
+procedural additive-pose jump (jump). No errors, no broken state.
 
-The loader (`game.ts` → `tryLoadGltfPlayer`) tries `.fbx` first,
-falls back to `.glb` if no FBX is present. FBX is Mixamo's native
-export format so there's no conversion step needed.
+## Asset pipeline — converting from Mixamo
+
+The raw Mixamo FBX exports are ~50 MB each because they ship with
+~36 large uncompressed textures per character. We run them through
+a 3-step pipeline to produce the small `.glb` files committed
+here (17–22× reduction with no visible quality loss):
+
+```bash
+# 1. FBX → GLB (Facebook FBX2glTF binary, bundled via the fbx2gltf
+#    npm package). Installs once at the repo root:
+#      npm install --no-save fbx2gltf
+#    Binary path on Windows:
+#      node_modules/fbx2gltf/bin/Windows_NT/FBX2glTF.exe
+node_modules/fbx2gltf/bin/Windows_NT/FBX2glTF.exe \
+  -i /path/to/Mixamo.fbx \
+  -o /tmp/step1 \
+  -b
+
+# 2. Resize textures to 1024×1024 max.
+npx @gltf-transform/cli@latest resize \
+  /tmp/step1.glb /tmp/step2.glb --width 1024 --height 1024
+
+# 3. Re-encode textures to webp (much smaller than PNG/JPG for
+#    this character art style).
+npx @gltf-transform/cli@latest webp /tmp/step2.glb /tmp/final.glb
+```
+
+**Do NOT use** `gltf-transform optimize` or `flatten` or `join` —
+those operations break SkinnedMesh bind poses. The two ops above
+(resize + webp) are the only ones that preserve animation
+correctly.
 
 ## Mixamo download checklist (free, no royalties)
 
 1. Sign in at https://www.mixamo.com (free Adobe account)
-2. **Character** — pick one:
-   - Male: search **"Suit"** or **"Business Casual Man"** — the
-     suit-and-tie options look best for Tape's vibe
-   - Female: search **"Dress"** or **"Cocktail"** — pick a sleek
-     evening-wear character
-3. **Animation** — click the **Animations** tab, search **"Running"**.
-   Pick one that loops cleanly (the preview shows it looping).
-4. **In Place: ON** — check the **"In Place"** checkbox in the
-   right-hand panel. The character should be running on the spot
-   in the preview, not drifting forward.
-
-   (As a belt-and-braces safety net, the loader in `game.ts` strips
-   the X + Z root-bone position keyframes at runtime — see
-   `stripRootForwardMotion` — so the character stays put even if
-   you forget. But the preview is more accurate when In Place is on.)
+2. **Pick a character** (or upload your own). For the male player
+   we use a suited Mixamo character; for the female we use a
+   dressed character.
+3. **Animation** — click the **Animations** tab, search for the
+   one you want (e.g. **"Running"** for the run loop, **"Jump"**
+   for the jump). Pick one that loops cleanly for run; the jump
+   should start + end on the takeoff/landing pose.
+4. **In Place: ON** for run (checkbox in the right panel — the
+   character runs on the spot, not drifting forward). For jump,
+   leave it on too so the character stays at origin during the
+   leap.
 5. **Download settings**:
-   - Format: **FBX Binary (.fbx)**  ← Mixamo's default; no
-     conversion required
-   - Skin: **With Skin**
+   - Format: **FBX Binary (.fbx)**
+   - Skin: **With Skin** (critical — we need the textured mesh,
+     not animation-only)
    - Frames per Second: **30**
    - Keyframe Reduction: **None**
-6. Save as `runner_male.fbx` / `runner_female.fbx`
-7. Drop both into this folder
-8. Commit + deploy — `git add public/models/*.fbx && vercel --prod`
-
-## Optional: convert FBX → GLB for smaller file size
-
-FBX exports from Mixamo are usually 10–20MB per character. If you
-want faster loading, convert to glTF Binary (GLB, ~3–5MB):
-
-- **Easiest**: https://blackthread.io/gltf-converter/ — fully
-  client-side (no upload to any server), drag the .fbx in, click
-  Download GLB.
-- **Alternative**: Blender → File → Import → FBX → File → Export →
-  glTF 2.0 (.glb).
-
-Save the result as `runner_male.glb` / `runner_female.glb` next to
-(or instead of) the `.fbx` files. The loader prefers FBX if both
-are present — to use GLB instead, just delete the FBX.
+6. Run the 3-step pipeline above
+7. Drop the resulting `.glb` into this folder
+8. Commit + deploy — `git add public/models/*.glb && vercel --prod`
 
 ## License notes
 
 Mixamo characters and animations are free for personal and commercial
 use under Adobe's terms (no royalties, no attribution required, no
-subscription needed). The license forbids reselling the raw .fbx /
-.glb as a standalone asset, but embedding it in a product (this
+subscription needed). The license forbids reselling the raw `.fbx` /
+`.glb` as a standalone asset, but embedding it in a product (this
 game) is the intended use case. See https://www.mixamo.com/faq for
 details.
 
 ## Implementation notes (for future maintainers)
 
-The loader auto-scales the model to match `PLAYER.HEIGHT` (1.8m),
-offsets the feet to the ground, rotates 180° around Y so the
-character faces away from the camera (running into the screen),
-and picks the first animation clip whose name contains "run" /
-"running" / "jog" / "walk" — falling back to the first clip if
-none match. Root-bone X+Z keyframes are zeroed so the character
-stays put while the world scrolls past.
+The loader (`game.ts` → `tryLoadGltfPlayer` for the running
+character, `loadJumpCharacter` for the jump character):
 
-If a different character source is used (Quaternius, Kenney, custom
-Blender export), make sure the model:
+- auto-scales the model to match `PLAYER.HEIGHT` (1.8 m)
+- offsets the feet to the ground using foot-bone world-Y detection
+- rotates 180° around Y so the character faces away from the
+  camera (running into the screen)
+- picks the first animation clip whose name contains
+  "run" / "running" / "jog" / "walk" for the player; uses
+  `animations[0]` for the jump
+- strips root-bone X+Z position keyframes at runtime
+  (`stripRootForwardMotion`) so the character stays put while
+  the world scrolls past
 
-- exports as FBX Binary (.fbx) or glTF Binary (.glb)
+The jump character is rendered as a **separate visible entity**,
+not as a clip retargeted onto the running character — applying a
+Mixamo "without skin" clip to a "with skin" character produces
+twisted joints due to subtle bind-pose orientation differences.
+The two-characters approach sidesteps that entirely. Each FBX
+runs its own embedded animation against its own native skeleton.
+Visibility flips between the two on jump trigger / landing.
+
+If a different character source is used (Quaternius, Kenney,
+custom Blender export), make sure the model:
+
+- exports as glTF Binary (`.glb`)
 - has its pivot at the feet (Mixamo default)
-- includes at least one animation clip
+- includes at least one animation clip per file
 - ships with the skin baked in (the loaded scene should contain
   a `THREE.SkinnedMesh`)
