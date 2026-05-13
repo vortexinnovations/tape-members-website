@@ -1178,24 +1178,48 @@ export class RunnerGame {
 
   /**
    * Return a copy of `clip` with every track name's prefix
-   * rewritten from `fromPrefix` → `toPrefix`. Used to bind a
-   * Jump clip exported with one Mixamo prefix (`mixamorig7:`) to
-   * a player rig that uses a different one (`mixamorig:`).
+   * rewritten from `fromGltfPrefix` (the COLON-STRIPPED form
+   * GLTFLoader produces) → `toFbxPrefix` (the player's actual
+   * FBX bone-name prefix, complete with the colon).
    *
-   * Tracks without the source prefix are passed through
-   * unchanged. The clip is cloned defensively so the cached
-   * `playerJumpClip` field isn't mutated for the next character.
+   * Why this is more than a simple rename:
+   *
+   *   GLTFLoader runs every node name through
+   *   `PropertyBinding.sanitizeNodeName()` which strips the
+   *   reserved characters `[].:/` — so the jump GLB's bones,
+   *   which were exported as `mixamorig7:Hips`, end up named
+   *   `mixamorig7Hips` (colon gone) inside the loaded scene,
+   *   and the AnimationClip's tracks reference them as
+   *   `mixamorig7Hips.position`.
+   *
+   *   FBXLoader keeps colons intact, so the player's bones are
+   *   named `mixamorig7:Hips` (male) / `mixamorig:Hips` (female).
+   *
+   *   With those name forms diverging by one character, the
+   *   mixer's PropertyBinding can't resolve the jump clip's
+   *   tracks to any bone — every track silently no-ops and the
+   *   bones snap back to their bind pose (the Mixamo T-pose).
+   *
+   *   So even for the male character (where the underlying
+   *   prefix matches the GLB's source prefix), we MUST rewrite
+   *   the track names to re-insert the colon. The "passthrough
+   *   when prefixes match" shortcut was the bug — the original
+   *   prefixes didn't match in any case, because one had been
+   *   sanitized and the other hadn't.
+   *
+   * Tracks without the source prefix pass through unchanged.
+   * The clip is cloned defensively so the cached
+   * `playerJumpClip` isn't mutated for the next character swap.
    */
   private retargetClipPrefix(
     clip: THREE.AnimationClip,
-    fromPrefix: string,
-    toPrefix: string,
+    fromGltfPrefix: string,
+    toFbxPrefix: string,
   ): THREE.AnimationClip {
-    if (fromPrefix === toPrefix) return clip;
     const newClip = clip.clone();
     for (const track of newClip.tracks) {
-      if (track.name.startsWith(fromPrefix)) {
-        track.name = toPrefix + track.name.slice(fromPrefix.length);
+      if (track.name.startsWith(fromGltfPrefix)) {
+        track.name = toFbxPrefix + track.name.slice(fromGltfPrefix.length);
       }
     }
     return newClip;
@@ -1227,13 +1251,19 @@ export class RunnerGame {
       );
       return;
     }
-    // The stripped Jump GLB encodes `mixamorig7:` (the prefix
-    // Mixamo gave the original character export). For male
-    // (mixamorig7:) the prefix matches; for female (mixamorig:)
-    // we rename every track.
+    // The Jump GLB's source bones were `mixamorig7:Hips` etc.,
+    // but GLTFLoader stripped every colon during sanitizeNodeName,
+    // so the clip's tracks reference `mixamorig7Hips.position`
+    // (no colon). The player's FBX-loaded bones still have their
+    // colons. We re-insert by rewriting every track's leading
+    // `mixamorig7` → the player's actual prefix (which for male is
+    // `mixamorig7:` and for female is `mixamorig:`). This is the
+    // critical bind step — without it, none of the tracks resolve
+    // and the player snaps to bind-pose (T-pose) when the jump
+    // action's weight goes up.
     const retargeted = this.retargetClipPrefix(
       this.playerJumpClip,
-      'mixamorig7:',
+      'mixamorig7',
       playerPrefix,
     );
 
