@@ -24,6 +24,18 @@ export class HUD {
   private comboEl: HTMLDivElement;
   private buzzCells: HTMLDivElement[] = [];
   private vignetteEl: HTMLDivElement;
+  /**
+   * Transparent overlay positioned above the canvas. Its
+   * `backdrop-filter: blur(...)` is what produces the buzz blur
+   * effect — applied to anything BEHIND the overlay, i.e. the
+   * WebGL canvas. We use this instead of `filter: blur()` on the
+   * canvas directly because iOS WKWebView silently drops CSS
+   * filters on WebGL canvases (compositor doesn't run them
+   * through the filter pipeline). backdrop-filter ships with the
+   * same iOS support story as the existing buzz-meter chip, so
+   * it Just Works on the platforms we care about.
+   */
+  private blurOverlayEl: HTMLDivElement;
   private flashEl: HTMLDivElement;
   private flashTimer: number | null = null;
   private comboFadeTimer: number | null = null;
@@ -163,23 +175,56 @@ export class HUD {
     // ── Full-screen vignette ─────────────────────────────────────
     // Radial gradient mounted at the bottom of the stack so the
     // top-row HUD remains crisp. Opacity is driven by buzz level.
+    // Plain alpha overlay — no `mix-blend-mode` (which can be
+    // suppressed on the WebGL compositing layer in iOS WKWebView).
+    // Alpha values are tuned so the vignette is clearly visible at
+    // full strength without the multiply blend.
     this.vignetteEl = document.createElement('div');
     Object.assign(this.vignetteEl.style, {
       position: 'absolute',
       inset: '0',
       pointerEvents: 'none',
       background:
-        'radial-gradient(ellipse at center, transparent 35%, rgba(60, 0, 30, 0.65) 80%, rgba(0, 0, 0, 0.95) 100%)',
+        'radial-gradient(ellipse at center, transparent 28%, rgba(45, 0, 25, 0.75) 75%, rgba(0, 0, 0, 0.95) 100%)',
       opacity: '0',
       transition: 'opacity 0.4s ease',
-      mixBlendMode: 'multiply',
     } satisfies Partial<CSSStyleDeclaration>);
-    // Insert vignette BEHIND the HUD root, but in the same parent.
-    // We use z-index so vignette sits between the canvas (z=0) and
-    // the HUD root (z=2).
+
+    // ── Buzz blur overlay ────────────────────────────────────────
+    // Sits ABOVE the canvas but BELOW the HUD chrome — its
+    // backdrop-filter blurs the canvas (the only thing behind it)
+    // without blurring HUD text on top. Default 0px = no blur.
+    this.blurOverlayEl = document.createElement('div');
+    Object.assign(this.blurOverlayEl.style, {
+      position: 'absolute',
+      inset: '0',
+      pointerEvents: 'none',
+      backdropFilter: 'blur(0px)',
+      // 0.18s lag so the blur doesn't snap — feels more like the
+      // player's vision adjusting than a digital effect.
+      transition: 'backdrop-filter 0.18s ease',
+    } satisfies Partial<CSSStyleDeclaration>);
+    // -webkit- prefix for older iOS Safari (< 18). Set via
+    // setProperty since CSSStyleDeclaration doesn't expose the
+    // vendor-prefixed key on its typed surface.
+    this.blurOverlayEl.style.setProperty(
+      '-webkit-backdrop-filter',
+      'blur(0px)',
+    );
+    this.blurOverlayEl.style.setProperty(
+      'transition',
+      '-webkit-backdrop-filter 0.18s ease, backdrop-filter 0.18s ease',
+    );
+
+    // Z-stack: canvas (z=0) → vignette (z=1) → blur overlay (z=2)
+    // → HUD root (z=3). HUD stays crisp; the blur applies to
+    // canvas + vignette together (the latter gives the blurred
+    // periphery a darker, hazier look).
     this.vignetteEl.style.zIndex = '1';
-    this.root.style.zIndex = '2';
+    this.blurOverlayEl.style.zIndex = '2';
+    this.root.style.zIndex = '3';
     parent.appendChild(this.vignetteEl);
+    parent.appendChild(this.blurOverlayEl);
 
     // ── Brief flash for pickup names (e.g. "Champagne +50") ──────
     this.flashEl = document.createElement('div');
@@ -275,6 +320,18 @@ export class HUD {
   }
 
   /**
+   * Buzz blur amount in CSS pixels. Backed by `backdrop-filter`
+   * on a transparent overlay so it works reliably on iOS WKWebView
+   * (where `filter: blur()` on the WebGL canvas is dropped).
+   */
+  setBlur(px: number) {
+    const clamped = Math.max(0, Math.min(10, px));
+    const v = clamped > 0.01 ? `blur(${clamped.toFixed(2)}px)` : 'blur(0px)';
+    this.blurOverlayEl.style.backdropFilter = v;
+    this.blurOverlayEl.style.setProperty('-webkit-backdrop-filter', v);
+  }
+
+  /**
    * Briefly show "Champagne +50" (or similar) above the player.
    * Auto-fades. Multiple rapid pickups overwrite the text without
    * stacking — keeps the screen clean.
@@ -301,6 +358,7 @@ export class HUD {
     if (this.comboFadeTimer !== null) window.clearTimeout(this.comboFadeTimer);
     this.root.remove();
     this.vignetteEl.remove();
+    this.blurOverlayEl.remove();
   }
 }
 

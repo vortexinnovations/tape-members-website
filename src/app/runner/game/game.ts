@@ -572,9 +572,10 @@ export class RunnerGame {
       this.camera.fov = targetFov;
       this.camera.updateProjectionMatrix();
     }
-    // Canvas CSS blur — cheap and effective.
+    // Buzz blur — via HUD's backdrop-filter overlay (works on iOS
+    // WKWebView; `filter: blur()` on the WebGL canvas does NOT).
     const blurPx = this.reduceMotion ? 0 : buzzFx.blur;
-    this.canvas.style.filter = blurPx > 0 ? `blur(${blurPx.toFixed(2)}px)` : '';
+    this.hud.setBlur(blurPx);
 
     // ── Lane interpolation (eased) ────────────────────────────
     if (this.laneChangeTime < this.laneChangeDuration) {
@@ -1011,9 +1012,8 @@ export class RunnerGame {
     if (this.gameOver) return;
     this.gameOver = true;
     this.running = false;
-    // Clean up any residual canvas filter so the game-over screen
-    // is crisp.
-    this.canvas.style.filter = '';
+    // Drop the buzz blur overlay so the game-over panel renders crisp.
+    this.hud.setBlur(0);
     postToFlutter({
       type: 'gameOver',
       score: Math.floor(this.score),
@@ -1032,7 +1032,6 @@ export class RunnerGame {
   dispose() {
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     this.resizeObserver?.disconnect();
-    this.canvas.style.filter = '';
     this.hud.dispose();
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
