@@ -1305,6 +1305,45 @@ export class RunnerGame {
       this.playerJumpActions.push(action);
     }
 
+    // Sample the clip itself at multiple times to verify there's
+    // actually motion in it. If frame-0 == frame-mid == frame-end
+    // the clip is a static T-pose (export bug) and no binding
+    // strategy will fix it — we'd need a new asset.
+    //
+    // We don't have a public "evaluate this clip at time T" in
+    // Three.js, so do the inverse: pick three sample times, scrub
+    // the action to each, force a mixer tick, read the bone state.
+    const sampleAction =
+      this.playerJumpActions[0] ||
+      this.playerMixer.clipAction(this.playerJumpClip);
+    const sampleProbeBone =
+      skinnedMeshes
+        .find((m) => /body/i.test(m.name))
+        ?.skeleton?.getBoneByName('mixamorig7LeftShoulder') ||
+      skinnedMeshes[1].skeleton?.getBoneByName('mixamorig7LeftShoulder');
+    const sampleTimes = [
+      0,
+      this.playerJumpClip.duration * 0.25,
+      this.playerJumpClip.duration * 0.5,
+      this.playerJumpClip.duration * 0.75,
+      Math.max(0, this.playerJumpClip.duration - 0.001),
+    ];
+    sampleAction.play();
+    sampleAction.setEffectiveWeight(1);
+    const samples: string[] = [];
+    for (const t of sampleTimes) {
+      sampleAction.time = t;
+      this.playerMixer.update(0);
+      samples.push(
+        `t=${t.toFixed(2)}: LeftShoulder ${probeBone(sampleProbeBone)}`,
+      );
+    }
+    sampleAction.setEffectiveWeight(0);
+    sampleAction.time = 0;
+    console.log(
+      `[runner/jump-debug] clip motion samples:\n  ${samples.join('\n  ')}`,
+    );
+
     // Body-specific: dump its full bone-name list so we know the
     // shape of its skeleton, AND its parent in the scene graph
     // (sometimes FBXLoader parents a body skeleton oddly).
