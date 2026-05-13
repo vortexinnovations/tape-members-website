@@ -333,8 +333,12 @@ export class RunnerGame {
     this.camera.position.set(0, 4.5, 8);
     this.camera.lookAt(0, 1, -6);
 
-    this.buildScene();
+    // HUD constructed BEFORE buildScene because buildScene →
+    // buildPlayerVisual → setLoading(true) on the HUD. The HUD is
+    // a DOM overlay independent of the WebGL scene, so it's safe
+    // to construct it this early.
     this.hud = new HUD(canvas);
+    this.buildScene();
     this.attachInput();
     this.attachResize();
     this.start();
