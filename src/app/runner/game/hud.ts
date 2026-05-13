@@ -126,16 +126,17 @@ export class HUD {
     this.root.appendChild(topRow);
 
     // Buzz meter — horizontal pill, positioned absolutely at the
-    // bottom of the screen just below the combo chip. The cells
+    // bottom of the screen just ABOVE the combo chip. The cells
     // are generated dynamically by `rebuildBuzzCells` so the count
     // tracks the admin-configured maxTipsyLevel.
     this.buzzWrap = document.createElement('div');
     Object.assign(this.buzzWrap.style, {
       position: 'absolute',
       left: '50%',
-      // Below the combo chip (which sits at 100px above safe-area).
-      // Buzz pill is ~32px tall, combo chip ~38px — gives ~10px gap.
-      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 50px)',
+      // Sit just above the combo chip (which sits at 50px above
+      // safe-area). Combo chip is ~32px tall + ~10px gap → buzz
+      // bottom at safe-area + 95px.
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 95px)',
       transform: 'translateX(-50%)',
       display: 'flex',
       gap: '4px',
@@ -195,13 +196,15 @@ export class HUD {
     // Combo chip — absolutely positioned below the character so
     // it's right in the player's field of view during gameplay,
     // not tucked away in the corner. Hidden until combo >= 2.
+    // Sits BELOW the buzz bar so the multiplier text stays close
+    // to the bottom edge.
     this.comboEl = document.createElement('div');
     Object.assign(this.comboEl.style, {
       position: 'absolute',
       left: '50%',
-      // Sit above the system safe-area inset on phones. `calc` keeps
-      // it ~110 px above the bottom edge regardless of device.
-      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 100px)',
+      // Combo chip sits just above the safe-area inset. Buzz bar
+      // floats ~45 px above this.
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 50px)',
       transform: 'translateX(-50%) scale(0.85)',
       transformOrigin: 'center center',
       fontSize: '30px',
