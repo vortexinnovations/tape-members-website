@@ -614,20 +614,116 @@ export class RunnerGame {
 
   private spawnPickup() {
     const spec = rollPickup();
-    const geo = new THREE.CylinderGeometry(
-      spec.radius,
-      spec.radius * 0.9,
-      spec.height,
-      14,
-    );
-    const mat = new THREE.MeshStandardMaterial({
+    // Build the pickup as a Group of body + neck + cap, parented
+    // under one mesh so collision / scrolling / pickup-flash logic
+    // still treats it as a single object. The "mesh" we store in
+    // ActivePickup is the bounding-box outer geometry (invisible) —
+    // visuals are children. This keeps the collision math simple
+    // and lets us swap real GLB models in later without re-plumbing
+    // the lifecycle.
+    const group = new THREE.Group();
+
+    const bodyMat = new THREE.MeshStandardMaterial({
       color: spec.color,
-      roughness: 0.35,
-      metalness: 0.1,
+      roughness: 0.30,
+      metalness: 0.15,
       emissive: spec.color,
-      emissiveIntensity: spec.kind === 'methuselah' ? 0.35 : 0.12,
+      emissiveIntensity: spec.kind === 'methuselah' ? 0.45 : 0.18,
     });
-    const mesh = new THREE.Mesh(geo, mat);
+    const neckMat = new THREE.MeshStandardMaterial({
+      color: 0x141014, // dark, near-black neck
+      roughness: 0.4,
+      metalness: 0.2,
+    });
+    const capMat = new THREE.MeshStandardMaterial({
+      // Cap colour reads as foil — gold-ish for champagne tier,
+      // silver-ish for vodka tier, blue cap for water (sports
+      // bottle convention).
+      color: spec.kind === 'water'
+        ? 0x2b6fb3
+        : spec.kind.startsWith('vodka')
+          ? 0xc4c4c8
+          : 0xd9a23a, // champagne / magnum / methuselah
+      roughness: 0.4,
+      metalness: 0.6,
+    });
+
+    // Body — tapered slightly toward the neck (top smaller than bottom).
+    const bodyHeight = spec.height * 0.72;
+    const bodyGeo = new THREE.CylinderGeometry(
+      spec.radius * 0.78,        // top radius — narrows toward neck
+      spec.radius,                // bottom radius
+      bodyHeight,
+      16,
+    );
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.position.y = bodyHeight / 2;
+    group.add(body);
+
+    // Neck — narrower cylinder above the body.
+    const neckHeight = spec.height * 0.22;
+    const neckRadius = spec.radius * 0.30;
+    const neckGeo = new THREE.CylinderGeometry(
+      neckRadius * 0.85,
+      neckRadius,
+      neckHeight,
+      12,
+    );
+    const neck = new THREE.Mesh(neckGeo, neckMat);
+    neck.position.y = bodyHeight + neckHeight / 2;
+    group.add(neck);
+
+    // Cap — squat cylinder on top.
+    const capHeight = spec.height * 0.06;
+    const capGeo = new THREE.CylinderGeometry(
+      neckRadius * 1.05,
+      neckRadius * 0.95,
+      capHeight,
+      12,
+    );
+    const cap = new THREE.Mesh(capGeo, capMat);
+    cap.position.y = bodyHeight + neckHeight + capHeight / 2;
+    group.add(cap);
+
+    // Methuselah halo — emissive ring around the body. Sells the
+    // "rare pickup" feel even from a distance, before the player
+    // can read the bottle silhouette.
+    if (spec.kind === 'methuselah') {
+      const ringGeo = new THREE.TorusGeometry(
+        spec.radius * 1.55,
+        spec.radius * 0.07,
+        12,
+        24,
+      );
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0xffd45a,
+        transparent: true,
+        opacity: 0.7,
+      });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = bodyHeight * 0.5;
+      group.add(ring);
+    }
+
+    // ── Collider mesh (invisible — Group can't carry geometry for
+    // intersectsPlayer's BoxGeometry / CylinderGeometry inspection).
+    // We use a hidden cylinder with the spec's nominal dimensions
+    // so existing collision logic Just Works.
+    const colliderGeo = new THREE.CylinderGeometry(
+      spec.radius,
+      spec.radius,
+      spec.height,
+      8,
+    );
+    const colliderMat = new THREE.MeshBasicMaterial({ visible: false });
+    const mesh = new THREE.Mesh(colliderGeo, colliderMat);
+    mesh.add(group);
+    // Group sits at y=0 relative to mesh; mesh.position.y handles
+    // the world Y placement. Re-centre the group so body+neck+cap
+    // align around the collider's centre.
+    group.position.y = -spec.height / 2;
+
     const lane = Math.floor(Math.random() * LANES.X.length);
     mesh.position.set(LANES.X[lane], spec.height / 2 + 0.15, WORLD.SPAWN_Z);
     this.scene.add(mesh);
@@ -733,10 +829,17 @@ export class RunnerGame {
   }
 
   private disposeMesh(mesh: THREE.Mesh) {
-    mesh.geometry.dispose();
-    const m = mesh.material;
-    if (Array.isArray(m)) m.forEach((mat) => mat.dispose());
-    else m.dispose();
+    // Traverse — pickups are composite Groups (body/neck/cap + halo)
+    // parented under the collider mesh; obstacles are flat meshes.
+    // This handles both.
+    mesh.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.geometry.dispose();
+        const m = obj.material;
+        if (Array.isArray(m)) m.forEach((mat) => mat.dispose());
+        else m.dispose();
+      }
+    });
   }
 
   // ── Public bridge surface (called by page.tsx) ────────────────
