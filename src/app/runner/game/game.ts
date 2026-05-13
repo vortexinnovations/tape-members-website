@@ -349,13 +349,13 @@ export class RunnerGame {
       this.floorStripes.push(s);
     }
 
-    // ── Player — quick humanoid silhouette ──────────────────────
-    // Still placeholder geometry (no rigged Mixamo character yet),
-    // but reads as a person from a distance: torso capsule + head
-    // sphere + arms + legs. Outer mesh is an invisible collider
-    // sized to the original PLAYER.* dimensions so collision logic
-    // (intersectsPlayer) is unchanged. The visible children are
-    // animated via the existing run-bob in update().
+    // ── Player ──────────────────────────────────────────────────
+    // Invisible collider sized to the original PLAYER.* dimensions
+    // so collision logic stays untouched. The visible character is
+    // built as a separate child group by `buildPlayerVisual(gender)`,
+    // which we call once now with the empty default and again from
+    // init() when Flutter pushes the user's gender. The second call
+    // disposes the placeholder visual and swaps in the correct one.
     const collisionGeo = new THREE.BoxGeometry(
       PLAYER.WIDTH,
       PLAYER.HEIGHT,
@@ -364,88 +364,276 @@ export class RunnerGame {
     const collisionMat = new THREE.MeshBasicMaterial({ visible: false });
     this.player = new THREE.Mesh(collisionGeo, collisionMat);
     this.player.position.set(LANES.X[1], PLAYER.BASE_Y, 0);
+    this.scene.add(this.player);
 
-    // Brand-aligned palette: warm copper torso (matches the app's
-    // accent3), darker copper limbs, neutral head. Slight metallic
-    // so the club rig catches on them.
-    const torsoMat = new THREE.MeshStandardMaterial({
-      color: 0xb87333,
-      roughness: 0.55,
-      metalness: 0.15,
-    });
-    const limbMat = new THREE.MeshStandardMaterial({
-      color: 0x6a4220,
-      roughness: 0.6,
-      metalness: 0.1,
-    });
-    const headMat = new THREE.MeshStandardMaterial({
-      color: 0xe5b885,
-      roughness: 0.45,
-      metalness: 0.05,
-    });
+    // Default visual — used until init() arrives with a real
+    // playerGender. Treated as a neutral/male silhouette.
+    this.buildPlayerVisual('');
+  }
 
+  /**
+   * Build (or rebuild) the visible character meshes parented under
+   * `this.player`. Owns `this.playerVisual` and `this.playerLimbs`.
+   * Branches on gender for the silhouette:
+   *   - 'female' → little black dress, bare arms, long hair,
+   *     gold necklace, heels.
+   *   - 'male' / 'other' / '' → tailored suit, white shirt, short
+   *     hair, dress shoes.
+   *
+   * Disposes any existing visual before building the new one so
+   * subsequent calls (e.g. init() arriving with a gender) don't
+   * leak GPU memory.
+   */
+  private buildPlayerVisual(gender: string) {
+    // ── Dispose any existing visual ───────────────────────────
+    if (this.playerVisual) {
+      this.playerVisual.removeFromParent();
+      this.playerVisual.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          const m = obj.material;
+          if (Array.isArray(m)) m.forEach((mat) => mat.dispose());
+          else m.dispose();
+        }
+      });
+    }
+
+    const isFemale = gender === 'female';
     const visual = new THREE.Group();
 
-    // Torso — tall capsule. Three.CapsuleGeometry available in
-    // recent Three.js builds (>= 0.140).
-    const torsoH = PLAYER.HEIGHT * 0.50;
-    const torsoR = PLAYER.WIDTH * 0.32;
-    const torso = new THREE.Mesh(
-      new THREE.CapsuleGeometry(torsoR, torsoH * 0.7, 4, 12),
-      torsoMat,
-    );
-    torso.position.y = PLAYER.HEIGHT * 0.55;
-    visual.add(torso);
+    // Shared materials — neutral skin tone + dark hair regardless
+    // of gender. Players can be any race; we pick a warm-neutral
+    // skin tone for the placeholder.
+    const skinMat = new THREE.MeshStandardMaterial({
+      color: 0xd9a878,
+      roughness: 0.55,
+      metalness: 0.0,
+    });
+    const hairMat = new THREE.MeshStandardMaterial({
+      color: 0x16110c,
+      roughness: 0.75,
+      metalness: 0.05,
+    });
+    const shoeMat = new THREE.MeshStandardMaterial({
+      color: 0x040404,
+      roughness: 0.45,
+      metalness: 0.25,
+    });
 
-    // Head — sphere atop the torso.
-    const headR = PLAYER.WIDTH * 0.22;
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(headR, 14, 12),
-      headMat,
-    );
-    head.position.y = PLAYER.HEIGHT * 0.93;
-    visual.add(head);
+    const H = PLAYER.HEIGHT; // 1.8
+    const W = PLAYER.WIDTH; // 1.0
 
-    // Arms — slim capsules angled slightly outward. Static for now
-    // (real run animation cycle comes with the Mixamo upgrade).
-    const armH = PLAYER.HEIGHT * 0.42;
-    const armR = PLAYER.WIDTH * 0.10;
-    const armGeo = new THREE.CapsuleGeometry(armR, armH * 0.6, 3, 8);
-    const armOffsetX = PLAYER.WIDTH * 0.32;
-    const armY = PLAYER.HEIGHT * 0.55;
-    const armL = new THREE.Mesh(armGeo, limbMat);
-    armL.position.set(-armOffsetX, armY, 0);
-    armL.rotation.z = 0.18;
-    visual.add(armL);
-    const armR_ = new THREE.Mesh(armGeo, limbMat);
-    armR_.position.set(armOffsetX, armY, 0);
-    armR_.rotation.z = -0.18;
-    visual.add(armR_);
+    let armL: THREE.Mesh;
+    let armR: THREE.Mesh;
+    let legL: THREE.Mesh;
+    let legR: THREE.Mesh;
 
-    // Legs — capsules below the torso.
-    const legH = PLAYER.HEIGHT * 0.38;
-    const legR = PLAYER.WIDTH * 0.14;
-    const legGeo = new THREE.CapsuleGeometry(legR, legH * 0.55, 3, 8);
-    const legOffsetX = PLAYER.WIDTH * 0.18;
-    const legY = PLAYER.HEIGHT * 0.18;
-    const legL = new THREE.Mesh(legGeo, limbMat);
-    legL.position.set(-legOffsetX, legY, 0);
-    visual.add(legL);
-    const legR_ = new THREE.Mesh(legGeo, limbMat);
-    legR_.position.set(legOffsetX, legY, 0);
-    visual.add(legR_);
+    if (isFemale) {
+      // ── Female: little-black-dress silhouette ────────────────
+      // Slim upper body + dress flaring at the hip. Bare arms +
+      // bare neck/décolletage. Long hair (ellipsoid behind head).
+      // Gold necklace torus at the collarbone.
+      const dressMat = new THREE.MeshStandardMaterial({
+        color: 0x141014,
+        roughness: 0.40,
+        metalness: 0.20,
+      });
+      const goldMat = new THREE.MeshStandardMaterial({
+        color: 0xd4af37,
+        roughness: 0.30,
+        metalness: 0.85,
+      });
 
-    // Centre the visual group relative to the collider — the
-    // collider's local origin is its centre, so we offset the
-    // visual group down by half-height to put feet on the ground.
+      // Upper body — slim cylinder, slightly narrower at waist.
+      const upperH = H * 0.32;
+      const upperR = W * 0.16;
+      const upper = new THREE.Mesh(
+        new THREE.CylinderGeometry(upperR * 0.94, upperR * 1.05, upperH, 14),
+        dressMat,
+      );
+      upper.position.y = H * 0.55;
+      visual.add(upper);
+
+      // Dress flare — wide cone from waist outward to hem.
+      const flareH = H * 0.30;
+      const flare = new THREE.Mesh(
+        new THREE.CylinderGeometry(upperR * 0.94, upperR * 1.55, flareH, 16),
+        dressMat,
+      );
+      flare.position.y = H * 0.40 - flareH / 2 + upperH / 2 + 0.01;
+      // Equivalently: flare top sits right under upper bottom.
+      flare.position.y = H * 0.55 - upperH / 2 - flareH / 2;
+      visual.add(flare);
+
+      // Necklace — thin gold ring at the collarbone.
+      const necklace = new THREE.Mesh(
+        new THREE.TorusGeometry(upperR * 0.92, 0.012, 6, 18),
+        goldMat,
+      );
+      necklace.rotation.x = Math.PI / 2;
+      necklace.position.y = H * 0.55 + upperH / 2 - 0.04;
+      visual.add(necklace);
+
+      // Head — slightly smaller sphere (skin tone).
+      const headR = W * 0.18;
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(headR, 16, 14),
+        skinMat,
+      );
+      head.position.y = H * 0.78;
+      visual.add(head);
+
+      // Hair — flowing ellipsoid that drapes past the shoulders.
+      // Constructed as a scaled sphere so it's wider and longer
+      // than the head, sitting slightly behind it.
+      const hairGeo = new THREE.SphereGeometry(headR * 1.18, 16, 14);
+      const hair = new THREE.Mesh(hairGeo, hairMat);
+      hair.scale.set(1.0, 1.6, 0.85);
+      hair.position.set(0, H * 0.73, -headR * 0.18);
+      visual.add(hair);
+
+      // Arms — bare skin (matches head), slim, stylish stance.
+      const armH = H * 0.40;
+      const armR_ = W * 0.05;
+      const armGeo = new THREE.CapsuleGeometry(armR_, armH * 0.7, 3, 8);
+      const armOffsetX = W * 0.21;
+      const armY = H * 0.55;
+      armL = new THREE.Mesh(armGeo, skinMat);
+      armL.position.set(-armOffsetX, armY, 0);
+      armL.rotation.z = 0.10;
+      visual.add(armL);
+      armR = new THREE.Mesh(armGeo, skinMat);
+      armR.position.set(armOffsetX, armY, 0);
+      armR.rotation.z = -0.10;
+      visual.add(armR);
+
+      // Legs — bare skin (the dress hem cuts above the knees).
+      const legH = H * 0.22;
+      const legR_ = W * 0.07;
+      const legGeo = new THREE.CapsuleGeometry(legR_, legH * 0.55, 3, 8);
+      const legOffsetX = W * 0.08;
+      const legY = H * 0.15;
+      legL = new THREE.Mesh(legGeo, skinMat);
+      legL.position.set(-legOffsetX, legY, 0);
+      visual.add(legL);
+      legR = new THREE.Mesh(legGeo, skinMat);
+      legR.position.set(legOffsetX, legY, 0);
+      visual.add(legR);
+
+      // Heels — small dark wedges at the bottom of each leg.
+      const heelGeo = new THREE.BoxGeometry(W * 0.10, 0.06, W * 0.18);
+      const heelL = new THREE.Mesh(heelGeo, shoeMat);
+      heelL.position.set(-legOffsetX, 0.03, W * 0.04);
+      visual.add(heelL);
+      const heelR = new THREE.Mesh(heelGeo, shoeMat);
+      heelR.position.set(legOffsetX, 0.03, W * 0.04);
+      visual.add(heelR);
+    } else {
+      // ── Male / default: tailored suit silhouette ─────────────
+      // Slim suit jacket + trousers, with a white shirt triangle
+      // visible at the neckline. Broad shoulders, narrower waist.
+      const suitMat = new THREE.MeshStandardMaterial({
+        color: 0x14181f,
+        roughness: 0.55,
+        metalness: 0.10,
+      });
+      const shirtMat = new THREE.MeshStandardMaterial({
+        color: 0xeae6dd,
+        roughness: 0.65,
+        metalness: 0.0,
+      });
+
+      // Torso — capsule with shoulders sharper than the female
+      // upper body. Slight taper bottom-to-top.
+      const torsoH = H * 0.50;
+      const torsoR = W * 0.21;
+      const torso = new THREE.Mesh(
+        new THREE.CapsuleGeometry(torsoR, torsoH * 0.65, 4, 14),
+        suitMat,
+      );
+      torso.position.y = H * 0.50;
+      visual.add(torso);
+
+      // Shirt — flat triangle visible at the neckline (V-shape
+      // formed by the open suit jacket). Implemented as a thin
+      // wedge box parented in front of the torso, top-centered.
+      const shirt = new THREE.Mesh(
+        new THREE.BoxGeometry(torsoR * 0.6, torsoH * 0.30, 0.04),
+        shirtMat,
+      );
+      shirt.position.set(0, H * 0.62, torsoR * 0.92);
+      visual.add(shirt);
+
+      // Head — skin tone sphere.
+      const headR = W * 0.18;
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(headR, 14, 12),
+        skinMat,
+      );
+      head.position.y = H * 0.82;
+      visual.add(head);
+
+      // Hair — short, flat cap atop the head. Scaled sphere so
+      // it hugs the top of the head and doesn't cover the face.
+      const hairTopGeo = new THREE.SphereGeometry(
+        headR * 0.95,
+        14,
+        10,
+        0,
+        Math.PI * 2,
+        0,
+        Math.PI / 2,
+      );
+      const hairTop = new THREE.Mesh(hairTopGeo, hairMat);
+      hairTop.position.y = H * 0.83;
+      visual.add(hairTop);
+
+      // Arms — in suit sleeves (dark), slim. Slightly out from
+      // the torso so the shoulders read.
+      const armH = H * 0.42;
+      const armR_ = W * 0.07;
+      const armGeo = new THREE.CapsuleGeometry(armR_, armH * 0.7, 3, 10);
+      const armOffsetX = W * 0.27;
+      const armY = H * 0.52;
+      armL = new THREE.Mesh(armGeo, suitMat);
+      armL.position.set(-armOffsetX, armY, 0);
+      armL.rotation.z = 0.16;
+      visual.add(armL);
+      armR = new THREE.Mesh(armGeo, suitMat);
+      armR.position.set(armOffsetX, armY, 0);
+      armR.rotation.z = -0.16;
+      visual.add(armR);
+
+      // Legs — dress trousers (suit colour), full length.
+      const legH = H * 0.38;
+      const legR_ = W * 0.11;
+      const legGeo = new THREE.CapsuleGeometry(legR_, legH * 0.65, 3, 10);
+      const legOffsetX = W * 0.13;
+      const legY = H * 0.18;
+      legL = new THREE.Mesh(legGeo, suitMat);
+      legL.position.set(-legOffsetX, legY, 0);
+      visual.add(legL);
+      legR = new THREE.Mesh(legGeo, suitMat);
+      legR.position.set(legOffsetX, legY, 0);
+      visual.add(legR);
+
+      // Dress shoes — wider than feet, polished black.
+      const shoeGeo = new THREE.BoxGeometry(W * 0.13, 0.07, W * 0.22);
+      const shoeL = new THREE.Mesh(shoeGeo, shoeMat);
+      shoeL.position.set(-legOffsetX, 0.035, W * 0.05);
+      visual.add(shoeL);
+      const shoeR = new THREE.Mesh(shoeGeo, shoeMat);
+      shoeR.position.set(legOffsetX, 0.035, W * 0.05);
+      visual.add(shoeR);
+    }
+
+    // Offset the whole group down by half the collider height so
+    // the feet land on the ground when the collider sits at
+    // PLAYER.BASE_Y. (Collider origin is its centre.)
     visual.position.y = -PLAYER.HEIGHT / 2;
-    // Cache references on the player object for the run-cycle
-    // animation in update().
     this.player.add(visual);
     this.playerVisual = visual;
-    this.playerLimbs = { armL, armR: armR_, legL, legR: legR_ };
-
-    this.scene.add(this.player);
+    this.playerLimbs = { armL, armR, legL, legR };
   }
 
   // ── Input ───────────────────────────────────────────────────────
@@ -1096,88 +1284,123 @@ export class RunnerGame {
     }
 
     if (spec.kind === 'speaker') {
-      // Cabinet box — the collider geometry.
-      const cabinetGeo = new THREE.BoxGeometry(spec.width, spec.height, spec.depth);
+      // Cabinet — slightly lighter than before so the silver rims
+      // pop against it. Real club PA cabinets are matte black; we
+      // ride a touch lighter (0x252525) for visibility in fog.
+      const cabinetGeo = new THREE.BoxGeometry(
+        spec.width,
+        spec.height,
+        spec.depth,
+      );
       const cabinetMat = new THREE.MeshStandardMaterial({
-        color: spec.color, // 0x1c1c1c
-        roughness: 0.5,
-        metalness: 0.2,
+        color: 0x252525,
+        roughness: 0.7,
+        metalness: 0.1,
       });
       const mesh = new THREE.Mesh(cabinetGeo, cabinetMat);
 
-      // Front panel — slightly raised, slightly darker. Sits just
-      // off the +Z face (player-facing side).
+      // Front faceplate — darker than the cabinet so the cones'
+      // silver rims contrast against it.
       const panelGeo = new THREE.BoxGeometry(
-        spec.width * 0.86,
-        spec.height * 0.88,
+        spec.width * 0.92,
+        spec.height * 0.92,
         0.04,
       );
       const panelMat = new THREE.MeshStandardMaterial({
         color: 0x0e0e0e,
-        roughness: 0.6,
+        roughness: 0.55,
         metalness: 0.35,
       });
       const panel = new THREE.Mesh(panelGeo, panelMat);
       panel.position.z = spec.depth / 2 + 0.02;
       mesh.add(panel);
 
-      // Woofer (larger driver, lower half of the front).
-      const wooferR = spec.width * 0.28;
-      const wooferY = -spec.height * 0.13;
-      const wooferZ = spec.depth / 2 + 0.06;
-      // Outer rim — torus.
-      const wooferRimGeo = new THREE.TorusGeometry(wooferR, 0.045, 8, 24);
-      const driverMat = new THREE.MeshStandardMaterial({
-        color: 0x080808,
-        roughness: 0.8,
-        metalness: 0.3,
+      // Driver rim material — SILVER, prominent enough to read at
+      // distance through fog. Thick torus tube so the rim has
+      // visible mass instead of looking like a hairline.
+      const rimMat = new THREE.MeshStandardMaterial({
+        color: 0x9a9a9a,
+        roughness: 0.4,
+        metalness: 0.85,
       });
-      const wooferRim = new THREE.Mesh(wooferRimGeo, driverMat);
-      wooferRim.position.set(0, wooferY, wooferZ);
-      mesh.add(wooferRim);
-      // Cone — slightly recessed flat disc just behind the rim.
-      const wooferConeGeo = new THREE.CircleGeometry(wooferR * 0.94, 20);
+      // Cone (the actual speaker membrane) — pure matte black so
+      // the rim's silver clearly outlines it.
       const coneMat = new THREE.MeshStandardMaterial({
         color: 0x040404,
-        roughness: 0.9,
-        metalness: 0.1,
+        roughness: 0.95,
+        metalness: 0.0,
       });
-      const wooferCone = new THREE.Mesh(wooferConeGeo, coneMat);
-      wooferCone.position.set(0, wooferY, wooferZ - 0.02);
-      mesh.add(wooferCone);
-      // Centre dust cap — small bright dot.
-      const dustCapGeo = new THREE.CircleGeometry(wooferR * 0.18, 14);
+      // Dust cap — silver dome at the centre of each driver.
       const dustCapMat = new THREE.MeshStandardMaterial({
-        color: 0x222222,
-        roughness: 0.4,
-        metalness: 0.6,
+        color: 0x707070,
+        roughness: 0.45,
+        metalness: 0.7,
       });
-      const dustCap = new THREE.Mesh(dustCapGeo, dustCapMat);
-      dustCap.position.set(0, wooferY, wooferZ + 0.001);
-      mesh.add(dustCap);
 
-      // Tweeter (smaller driver, upper portion).
-      const tweeterR = spec.width * 0.14;
-      const tweeterY = spec.height * 0.27;
-      const tweeterRim = new THREE.Mesh(
-        new THREE.TorusGeometry(tweeterR, 0.032, 6, 18),
-        driverMat,
+      // Driver Z plane — pushed further forward (0.10 in front of
+      // the cabinet face) so the rims cast a clear silhouette edge
+      // against the panel even at oblique camera angles.
+      const driverZ = spec.depth / 2 + 0.08;
+
+      // Woofer (large driver, ~60% of width, lower half of front).
+      const wooferR = spec.width * 0.30;
+      const wooferY = -spec.height * 0.15;
+      const wooferRim = new THREE.Mesh(
+        // Thicker tube — 0.075 vs the old 0.045 — so the rim reads
+        // as a chunky bezel instead of disappearing.
+        new THREE.TorusGeometry(wooferR, 0.075, 10, 28),
+        rimMat,
       );
-      tweeterRim.position.set(0, tweeterY, wooferZ);
-      mesh.add(tweeterRim);
-      const tweeterCone = new THREE.Mesh(
-        new THREE.CircleGeometry(tweeterR * 0.92, 16),
+      wooferRim.position.set(0, wooferY, driverZ);
+      mesh.add(wooferRim);
+      const wooferCone = new THREE.Mesh(
+        new THREE.CircleGeometry(wooferR * 0.94, 24),
         coneMat,
       );
-      tweeterCone.position.set(0, tweeterY, wooferZ - 0.02);
-      mesh.add(tweeterCone);
+      wooferCone.position.set(0, wooferY, driverZ - 0.03);
+      mesh.add(wooferCone);
+      const wooferDust = new THREE.Mesh(
+        new THREE.SphereGeometry(wooferR * 0.22, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+        dustCapMat,
+      );
+      wooferDust.rotation.x = -Math.PI / 2;
+      wooferDust.position.set(0, wooferY, driverZ + 0.005);
+      mesh.add(wooferDust);
 
-      // Tiny power-LED accent — bright spot above the tweeter so
-      // the speaker reads as "on" even in the dark fog.
-      const ledGeo = new THREE.CircleGeometry(0.025, 8);
-      const ledMat = new THREE.MeshBasicMaterial({ color: 0xff5a3a });
+      // Tweeter (smaller driver, ~25% of width, upper area).
+      const tweeterR = spec.width * 0.13;
+      const tweeterY = spec.height * 0.28;
+      const tweeterRim = new THREE.Mesh(
+        new THREE.TorusGeometry(tweeterR, 0.05, 8, 20),
+        rimMat,
+      );
+      tweeterRim.position.set(0, tweeterY, driverZ);
+      mesh.add(tweeterRim);
+      const tweeterCone = new THREE.Mesh(
+        new THREE.CircleGeometry(tweeterR * 0.92, 18),
+        coneMat,
+      );
+      tweeterCone.position.set(0, tweeterY, driverZ - 0.025);
+      mesh.add(tweeterCone);
+      const tweeterDust = new THREE.Mesh(
+        new THREE.SphereGeometry(tweeterR * 0.32, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+        dustCapMat,
+      );
+      tweeterDust.rotation.x = -Math.PI / 2;
+      tweeterDust.position.set(0, tweeterY, driverZ + 0.005);
+      mesh.add(tweeterDust);
+
+      // Power-LED — bigger (radius 0.045 vs 0.025), MeshBasicMaterial
+      // so it's bright through fog. Sits in the bottom-right of the
+      // faceplate — classic PA-amp position.
+      const ledGeo = new THREE.CircleGeometry(0.045, 12);
+      const ledMat = new THREE.MeshBasicMaterial({ color: 0xff4030 });
       const led = new THREE.Mesh(ledGeo, ledMat);
-      led.position.set(spec.width * 0.32, spec.height * 0.42, wooferZ);
+      led.position.set(
+        spec.width * 0.34,
+        -spec.height * 0.40,
+        driverZ + 0.005,
+      );
       mesh.add(led);
 
       return mesh;
@@ -1317,7 +1540,14 @@ export class RunnerGame {
   /** Called by Flutter once the WebView mounts. */
   init(payload: InitPayload) {
     this.userId = payload.userId;
-    this.playerGender = payload.playerGender ?? '';
+    const newGender = (payload.playerGender ?? '').toLowerCase();
+    // Rebuild the player visual when gender changes from the
+    // current value (or when arriving for the first time after the
+    // default empty-string build in buildScene).
+    if (newGender !== this.playerGender) {
+      this.playerGender = newGender as PlayerGender;
+      this.buildPlayerVisual(newGender);
+    }
     if (payload.settings) {
       const s = payload.settings;
       if (typeof s.startSpeed === 'number') {
