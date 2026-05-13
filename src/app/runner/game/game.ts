@@ -178,13 +178,19 @@ export class RunnerGame {
    *     ultra-narrow doesn't fisheye.
    */
   private computeBaseFov(): number {
-    const LANE_VISIBLE_HALF_X = 3.0; // ±2.4 lane + ±0.5 player + 0.1 margin
+    // 3.2 = ±2.4 lane + ±0.5 player + 0.3 visual breathing room.
+    // Was 3.0 + 0.1 margin — tight enough that some narrow phones
+    // still clipped the player by a hair.
+    const LANE_VISIBLE_HALF_X = 3.2;
     const PLAYER_VIEW_DIST = 8.6;
     const aspect = Math.max(0.3, this.aspect());
     const hHalf = Math.atan(LANE_VISIBLE_HALF_X / PLAYER_VIEW_DIST);
     const vHalf = Math.atan(Math.tan(hHalf) / aspect);
     const vFov = (vHalf * 2 * 180) / Math.PI;
-    return Math.min(72, Math.max(55, vFov));
+    // Clamp upper bound at 78° — empirically the safe limit before
+    // perspective-stretch (fisheye) becomes noticeable at the
+    // screen edges on a portrait phone.
+    return Math.min(78, Math.max(55, vFov));
   }
 
   private resize() {

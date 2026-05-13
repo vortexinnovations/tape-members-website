@@ -281,7 +281,7 @@ export class HUD {
    */
   flashPickup(spec: PickupSpec, displayScore: number) {
     if (spec.kind === 'water') {
-      this.flashEl.textContent = `Water · -1 buzz`;
+      this.flashEl.textContent = `Water -1 buzz`;
       this.flashEl.style.color = '#9cd6ff';
     } else {
       this.flashEl.textContent = `${spec.label} +${displayScore}`;
