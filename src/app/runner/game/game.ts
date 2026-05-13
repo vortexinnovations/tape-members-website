@@ -385,12 +385,12 @@ export class RunnerGame {
     // Distance contributes 1 pt/m to the score baseline.
     this.score += this.speed * dt;
 
-    // ── Buzz tick (decay + blackout check) ────────────────────
+    // ── Buzz tick (decay only) ────────────────────────────────
+    // Blackout NO LONGER fires from just reaching L5 — see buzz.ts
+    // `add()` return value. L5 is the "danger zone" the player can
+    // sit in (and decay out of) until the next bottle tips them
+    // over. So this tick is purely for the time-decay drop.
     this.buzz.tickDecay(dt);
-    if (this.buzz.isBlackout()) {
-      this.endGame('blackout');
-      return;
-    }
     const buzzFx = this.buzz.getInterpolatedEffectParams();
 
     // ── Apply buzz visual effects to camera + canvas ──────────
@@ -560,6 +560,8 @@ export class RunnerGame {
   private collectPickup(p: ActivePickup) {
     const spec = p.spec;
     if (spec.kind === 'water') {
+      // Water is always safe — even at max buzz, drinking water
+      // drops a level (and returns false from add()).
       this.buzz.add(spec.buzzDelta); // -1
       this.watersUsed++;
       // Water doesn't extend combo (no score from it).
@@ -572,10 +574,20 @@ export class RunnerGame {
       const mult = comboMultiplier(this.combo);
       const earned = Math.round(spec.score * mult);
       this.score += earned;
-      this.buzz.add(spec.buzzDelta);
       this.bottlesCollected++;
       this.hud.flashPickup(spec, earned);
       this.hud.setCombo(this.combo, mult);
+      // Last — apply the buzz delta. If we were already at max, this
+      // is the bottle that tips us over → blackout.
+      const blackedOut = this.buzz.add(spec.buzzDelta);
+      // Hide the mesh before ending so the player at least sees
+      // they DID grab the bottle that killed them (vs feeling like
+      // it was lost / dropped through the floor).
+      p.mesh.visible = false;
+      if (blackedOut) {
+        this.endGame('blackout');
+        return;
+      }
     }
     // Hide the mesh immediately on collection so the player feels
     // the take. We don't bother with a fancy pickup animation in

@@ -225,8 +225,11 @@ export const BUZZ = {
     { vignette: 0.28, blur: 0.8, sway: 2.0, laneSlowFactor: 1.25, fovOffset: 2 },
     // L4 — Hammered. Lane changes 50% slower. FOV tunnels.
     { vignette: 0.40, blur: 1.8, sway: 3.0, laneSlowFactor: 1.50, fovOffset: 5 },
-    // L5 — Blackout. Game over (effects unused but kept for index safety).
-    { vignette: 0.80, blur: 4.0, sway: 4.0, laneSlowFactor: 2.00, fovOffset: 8 },
+    // L5 — Danger zone (May 13, 2026 design change). NOT instant
+    // blackout anymore — the next buzz-adding pickup kills the run.
+    // Effects are dialled to "intense but playable" so the player
+    // can scramble for water without the screen being unreadable.
+    { vignette: 0.55, blur: 2.5, sway: 3.5, laneSlowFactor: 1.75, fovOffset: 7 },
   ] as readonly BuzzEffectParams[],
 } as const;
 

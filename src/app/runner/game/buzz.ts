@@ -35,14 +35,32 @@ export class Buzz {
     if (Number.isFinite(s) && s > 0) this.decaySeconds = s;
   }
 
-  /** Add (positive) or subtract (negative) buzz. Clamps to [0, MAX]. */
-  add(delta: number) {
-    if (delta === 0) return;
+  /**
+   * Add (positive) or subtract (negative) buzz. Clamps to [0, MAX].
+   *
+   * Returns `true` if this call caused a BLACKOUT — i.e. the player
+   * was already at MAX_LEVEL and tried to add more buzz. The level
+   * itself stays clamped at MAX so the visuals stay consistent;
+   * the boolean is what the game loop uses to end the run.
+   *
+   * Design (May 13, 2026): hitting MAX is NOT instant death — it's
+   * a sustained danger state ("one more drink and you're done"),
+   * which gives the player a real window to scramble for water.
+   * Only the next buzz-adding pickup tips them over.
+   */
+  add(delta: number): boolean {
+    if (delta === 0) return false;
+    if (delta > 0 && this.level >= BUZZ.MAX_LEVEL) {
+      // Already maxed — this push is the one that kills the run.
+      this.peak = BUZZ.MAX_LEVEL;
+      return true;
+    }
     this.level = Math.max(0, Math.min(BUZZ.MAX_LEVEL, this.level + delta));
     if (this.level > this.peak) this.peak = this.level;
     // Reset the decay accumulator on any change so a fresh bottle
     // doesn't compete with a half-expired decay window.
     this.decayAccum = 0;
+    return false;
   }
 
   /** Advance time. Drops one level every `decaySeconds`. */
@@ -63,7 +81,13 @@ export class Buzz {
     return this.peak;
   }
 
-  isBlackout(): boolean {
+  /**
+   * True when the player is sitting at the max-buzz "danger zone" —
+   * one more bottle and they black out. Used by the HUD to pulse
+   * the meter, NOT by the game loop to end the run (that decision
+   * lives inside `add()`, which signals blackout via its return).
+   */
+  isAtMaxBuzz(): boolean {
     return this.level >= BUZZ.MAX_LEVEL;
   }
 

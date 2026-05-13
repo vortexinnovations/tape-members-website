@@ -36,6 +36,21 @@ export class HUD {
   constructor(canvas: HTMLCanvasElement) {
     const parent = canvas.parentElement ?? document.body;
 
+    // Inject the keyframes for the danger-zone buzz pulse once.
+    // Idempotent — multiple HUDs in quick succession (e.g. play
+    // again → new HUD) won't duplicate.
+    if (!document.getElementById('tape-runner-hud-keyframes')) {
+      const style = document.createElement('style');
+      style.id = 'tape-runner-hud-keyframes';
+      style.textContent = `
+        @keyframes tapeRunnerBuzzPulse {
+          0%, 100% { transform: scale(1.0); filter: brightness(1.0); }
+          50% { transform: scale(1.12); filter: brightness(1.4); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
     this.root = document.createElement('div');
     Object.assign(this.root.style, {
       position: 'absolute',
@@ -207,20 +222,31 @@ export class HUD {
   }
 
   setBuzz(level: number) {
-    // Fill cells 0..(level-1). Past level 3 the colour shifts to a
-    // warning red; at level 4 it pulses to make the "almost
-    // blackout" state hard to miss.
+    // Fill cells 0..(level-1). At max-buzz (L5 = all 5 cells filled)
+    // the whole meter pulses red — that's the "one more bottle and
+    // you blackout" state. At L4 just the last cell glows softly.
+    const atMax = level >= 5;
     for (let i = 0; i < this.buzzCells.length; i++) {
       const cell = this.buzzCells[i];
       if (i < level) {
         cell.style.background = colorForCell(i, level);
-        cell.style.boxShadow =
-          level >= 4 && i === level - 1
-            ? '0 0 8px rgba(255, 80, 80, 0.8)'
-            : 'none';
+        if (atMax) {
+          // Pulse the whole bar at danger zone.
+          cell.style.boxShadow = '0 0 10px rgba(255, 60, 60, 0.95)';
+          cell.style.animation =
+            'tapeRunnerBuzzPulse 0.55s ease-in-out infinite';
+        } else if (level >= 4 && i === level - 1) {
+          // Last cell glows softly at L4 — "you're close."
+          cell.style.boxShadow = '0 0 8px rgba(255, 80, 80, 0.8)';
+          cell.style.animation = 'none';
+        } else {
+          cell.style.boxShadow = 'none';
+          cell.style.animation = 'none';
+        }
       } else {
         cell.style.background = 'rgba(255, 255, 255, 0.12)';
         cell.style.boxShadow = 'none';
+        cell.style.animation = 'none';
       }
     }
   }
