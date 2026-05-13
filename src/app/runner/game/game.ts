@@ -882,8 +882,10 @@ export class RunnerGame {
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const p = this.pickups[i];
       p.mesh.position.z += scroll;
-      // Gentle pickup rotation for visual interest.
-      p.mesh.rotation.y += dt * 1.6;
+      // (No pickup rotation — the bottle silhouettes scroll past
+      // facing the camera so labels stay readable. Champagne badges
+      // specifically would orbit around the bottle centre under
+      // rotation, swinging between visible and hidden.)
 
       if (!p.resolved && this.intersectsPlayer(p.mesh, 0.6)) {
         this.collectPickup(p);
@@ -1179,17 +1181,15 @@ export class RunnerGame {
       const labelMat = new THREE.SpriteMaterial({
         map: labelTexture,
         transparent: true,
-        // Sprite sits at the bottle's Y rotation axis (X=Z=0), which
-        // puts it geometrically INSIDE the opaque body cylinder. With
-        // normal depth testing it'd be hidden by the body wall every
-        // frame. Disable depth test + bump renderOrder so it always
-        // composites on top of the bottle, treating it as an emissive
-        // badge that "glows through" the glass.
-        depthTest: false,
+        // Normal depth testing — sprite sits in front of the bottle
+        // body but behind anything between it and the camera (player,
+        // closer obstacles). depthWrite off so the sprite's quad
+        // doesn't punch a hole in the depth buffer for objects
+        // behind it.
+        depthTest: true,
         depthWrite: false,
       });
       const label = new THREE.Sprite(labelMat);
-      label.renderOrder = 999;
       // Sprite scale = world-space dimensions of the rendered quad.
       // Width ≈ 1.4 × body radius keeps the badge inside the bottle's
       // silhouette from the front. Height is wider × the canvas
@@ -1197,9 +1197,12 @@ export class RunnerGame {
       const labelWidth = spec.radius * 1.4;
       const labelHeight = labelWidth * 1.25;
       label.scale.set(labelWidth, labelHeight, 1);
-      // Centred on the lower-middle of the body — same vertical
-      // placement as the real Dom Pérignon shield.
-      label.position.set(0, bodyH * 0.5, 0);
+      // Sit slightly in FRONT of the bottle (+Z, the camera-facing
+      // side) so it composites cleanly over the body without
+      // depth-fighting through the cylinder wall. The bottle no
+      // longer rotates per-frame so this position stays on the
+      // front face for the whole approach.
+      label.position.set(0, bodyH * 0.5, spec.radius + 0.02);
       group.add(label);
 
       // Shoulder — sharp taper from body radius down to neck radius.
