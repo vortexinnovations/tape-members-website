@@ -219,6 +219,26 @@ export class RunnerGame {
    * floor stripes.
    */
   private velvetRopes: THREE.Group[] = [];
+  /**
+   * TAPE dancer podiums — tall, slim columns with vertical LED
+   * edge strips, mounted just past the velvet rope on alternating
+   * sides of the runway. Reads as "you're sprinting past Tape's
+   * iconic light pillars." Each entry has its own pulse phase so
+   * the row creates a travelling wave of intensity along the
+   * track. Recycled in the update loop the same way as the rope.
+   *
+   * The 4 LED edge materials per podium are pulsed by mutating
+   * `material.color` directly (MeshBasicMaterial — unlit, so the
+   * RGB values ARE the on-screen pixel brightness). Each podium
+   * holds its own set of edge materials in `ledMats` for per-tick
+   * intensity modulation.
+   */
+  private dancerPodiums: {
+    group: THREE.Group;
+    ledMats: THREE.MeshBasicMaterial[];
+    glowMat: THREE.MeshBasicMaterial;
+    phase: number;
+  }[] = [];
   private pickups: ActivePickup[] = [];
   private obstacles: ActiveObstacle[] = [];
   private spawnAccumPickup = 0;
@@ -545,6 +565,15 @@ export class RunnerGame {
     // scrolls like the stripes and recycles when units pass
     // the camera.
     this.buildVelvetRopes();
+
+    // ── TAPE dancer podiums ────────────────────────────────────
+    // Tall slim columns with vertical red LED edge strips, mounted
+    // just past the rope on alternating sides. Pure Tape London
+    // iconography — these are the famous light-edged podiums the
+    // venue is known for. Pulse intensity is animated in the
+    // update loop so the row of podiums creates a travelling
+    // wave of brightness along the runway.
+    this.buildDancerPodiums();
 
     // ── Player ──────────────────────────────────────────────────
     // Invisible collider sized to the original PLAYER.* dimensions
@@ -1316,6 +1345,181 @@ export class RunnerGame {
     }
   }
 
+  /**
+   * Build TAPE London's signature dancer podiums — tall, slim
+   * columns with vertical LED edge strips pulsing in red. Sit
+   * just past the velvet rope on both sides, alternating left/
+   * right so the player sees a podium pass every ~9 m of track
+   * (~1.5 s at start speed, ~0.65 s at max speed). Each podium
+   * has:
+   *
+   *  - A matte black body box (the structure)
+   *  - 4 emissive red cylinders along its vertical corners (the
+   *    LED edges — this is what reads as "TAPE podium")
+   *  - A small alpha-blended glow disc on the floor at its base
+   *    (sells "it's lit, light is spilling onto the floor")
+   *
+   * Per-podium phase offset on the pulse means the row of
+   * podiums creates a travelling wave of brightness — the column
+   * nearest the player breathes brighter, then the next one back
+   * picks up, then the next, etc. Reads as a Tape light cue, not
+   * a flat row of glowing boxes.
+   *
+   * Pool size mirrors the velvet rope wavelength (90 m) so the
+   * two systems recycle in lockstep — no awkward visual beating
+   * between rope spacing and podium spacing.
+   */
+  private buildDancerPodiums() {
+    const POOL_LENGTH = 90;        // matches floor-stripe / rope wavelength
+    const SPACING_Z = 9;           // podium every 9 m of track (alternating sides)
+    const SIDE_X = 5.25;           // 1.5 m past the rope at X = ±3.75
+    const PODIUM_W = 0.7;          // base footprint width
+    const PODIUM_D = 0.7;          // base footprint depth
+    const PODIUM_H = 3.0;          // tall enough to dwarf the 1.8 m runner
+    const LED_RADIUS = 0.045;      // thin glow tubes — sized to read at speed
+    const BODY_INSET = 0.02;       // body slightly inside the LED edges
+                                   // so the corners glow free of the box
+    const GLOW_RADIUS = 1.4;       // floor glow disc size
+    // TAPE red — slightly warm magenta-red. Adjust here to retheme
+    // every podium globally (Pride, Halloween, etc.).
+    const LED_COLOR_BASE = 0xff0033;
+
+    // ── Shared geometries ─────────────────────────────────────
+    // Body: black box, slightly smaller than the LED-edge cage
+    // so the corner LEDs sit proud of the body's face. y=0 at the
+    // base (BoxGeometry is origin-centred by default).
+    const bodyGeo = new THREE.BoxGeometry(
+      PODIUM_W - 2 * BODY_INSET,
+      PODIUM_H,
+      PODIUM_D - 2 * BODY_INSET,
+    );
+    bodyGeo.translate(0, PODIUM_H / 2, 0);
+    // LED edge: thin vertical cylinder, base at y=0 (Three.js
+    // cylinders are origin-centred, so translate up by half its
+    // length). 8 radial segments — these are skinny tubes seen
+    // at distance + speed; 8 is enough to dodge faceting.
+    const ledGeo = new THREE.CylinderGeometry(
+      LED_RADIUS,
+      LED_RADIUS,
+      PODIUM_H,
+      8,
+    );
+    ledGeo.translate(0, PODIUM_H / 2, 0);
+    // Floor glow: flat circle laid on the floor at the podium's
+    // base. Additive-blended so it brightens whatever's underneath
+    // (floor stripes, rope shadow) rather than sitting opaquely
+    // on top.
+    const glowGeo = new THREE.CircleGeometry(GLOW_RADIUS, 24);
+    glowGeo.rotateX(-Math.PI / 2);
+    glowGeo.translate(0, 0.012, 0); // just above the floor stripes
+                                    // to avoid z-fighting
+
+    // ── Shared body material ──────────────────────────────────
+    // One material for every podium body. PBR matte black —
+    // catches very little of the club rig, so the eye is drawn
+    // to the LED edges instead of the box.
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x080808,
+      metalness: 0.15,
+      roughness: 0.85,
+    });
+
+    // ── Build the pool ────────────────────────────────────────
+    // Lay out alternating L/R every SPACING_Z metres along the
+    // 90 m wavelength. Even index → left side; odd → right.
+    const count = Math.floor(POOL_LENGTH / SPACING_Z); // 10 podiums total
+    for (let i = 0; i < count; i++) {
+      const sideX = (i % 2 === 0) ? -SIDE_X : SIDE_X;
+      const z = -i * SPACING_Z;
+      const unit = new THREE.Group();
+
+      // Body
+      unit.add(new THREE.Mesh(bodyGeo, bodyMat));
+
+      // 4 corner LED columns. MeshBasicMaterial because these
+      // are PURE LIGHT — they should ignore the scene lighting
+      // entirely and read at their assigned colour regardless
+      // of the club rig sweeping over them.
+      const halfW = PODIUM_W / 2;
+      const halfD = PODIUM_D / 2;
+      const corners: [number, number][] = [
+        [-halfW, -halfD],
+        [ halfW, -halfD],
+        [-halfW,  halfD],
+        [ halfW,  halfD],
+      ];
+      const ledMats: THREE.MeshBasicMaterial[] = [];
+      for (const [cx, cz] of corners) {
+        // Each podium owns its own LED materials so the pulse can
+        // be modulated per-podium (we mutate material.color each
+        // tick). 4 × 10 = 40 materials — trivial.
+        const ledMat = new THREE.MeshBasicMaterial({
+          color: LED_COLOR_BASE,
+          toneMapped: false, // bypass tone mapping so pure red
+                             // doesn't get desaturated
+        });
+        const led = new THREE.Mesh(ledGeo, ledMat);
+        led.position.set(cx, 0, cz);
+        unit.add(led);
+        ledMats.push(ledMat);
+      }
+
+      // Floor glow disc — soft red puddle at the podium's base.
+      // Additive blending + transparent so it brightens the floor
+      // beneath rather than painting over it.
+      const glowMat = new THREE.MeshBasicMaterial({
+        color: LED_COLOR_BASE,
+        transparent: true,
+        opacity: 0.35,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,    // don't occlude the floor stripes
+        toneMapped: false,
+      });
+      const glow = new THREE.Mesh(glowGeo, glowMat);
+      unit.add(glow);
+
+      unit.position.set(sideX, 0, z);
+      this.scene.add(unit);
+
+      // Phase offset per podium → travelling wave of pulse.
+      // 0.45 rad per index makes the wave readable as it moves
+      // along the line without being too obvious / hypnotic.
+      this.dancerPodiums.push({
+        group: unit,
+        ledMats,
+        glowMat,
+        phase: i * 0.45,
+      });
+    }
+  }
+
+  /**
+   * Per-frame intensity pulse for the dancer podiums. Each podium
+   * breathes between dim (0.55) and full (1.0) on a ~2.5 s cycle,
+   * with the per-podium phase offset producing a wave that
+   * travels along the row. Brightness multiplier is folded in
+   * here (same place as `tickClubLights`) so admin brightness
+   * tweaks affect podiums too.
+   */
+  private tickDancerPodiums(t: number) {
+    const brightness = this.brightnessMultiplier;
+    // 2.5 s breathing period → 2π / 2.5 ≈ 2.513 rad/s
+    const omega = (2 * Math.PI) / 2.5;
+    for (const p of this.dancerPodiums) {
+      const pulse = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * omega + p.phase));
+      // Modulate the base TAPE red by the pulse value. Clamp at 1
+      // so the brightness multiplier can dim but not super-bright
+      // (avoids white-clipping the red).
+      const v = Math.min(1, pulse * brightness);
+      for (const m of p.ledMats) {
+        m.color.setRGB(v, v * 0.02, v * 0.18); // (1, ~0, ~0.18) at full = saturated TAPE red
+      }
+      // Floor glow tracks the LED pulse but at lower opacity so
+      // it doesn't dominate.
+      p.glowMat.opacity = 0.2 + 0.25 * pulse;
+    }
+  }
+
   private buildPlayerVisualPlaceholder(gender: string) {
     // ── Dispose any existing visual ───────────────────────────
     this.disposePlayerVisualResources();
@@ -2001,6 +2205,10 @@ export class RunnerGame {
     if (!this.gameStarted) {
       this.previewClock += dt;
       this.tickClubLights(this.previewClock);
+      // Pulse the podium LEDs in the pre-game state too, so the
+      // scene reads as "live nightclub" while the swipe-to-start
+      // overlay is up.
+      this.tickDancerPodiums(this.previewClock);
       this.runPlayerIdleAnimation(this.previewClock, dt);
       return;
     }
@@ -2131,9 +2339,15 @@ export class RunnerGame {
       u.position.z += scroll;
       if (u.position.z > 4) u.position.z -= 90;
     }
+    // ── Scroll dancer podiums (same 90 m wavelength as ropes)
+    for (const p of this.dancerPodiums) {
+      p.group.position.z += scroll;
+      if (p.group.position.z > 4) p.group.position.z -= 90;
+    }
 
-    // ── Animate club lights ───────────────────────────────────
+    // ── Animate club lights + dancer podium LED pulse ─────────
     this.tickClubLights(this.duration);
+    this.tickDancerPodiums(this.duration);
 
     // ── Scroll pickups, check collection / pass ────────────────
     for (let i = this.pickups.length - 1; i >= 0; i--) {
