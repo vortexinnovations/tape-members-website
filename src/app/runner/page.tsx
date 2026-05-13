@@ -25,6 +25,7 @@
 import { useEffect, useRef } from 'react';
 import { RunnerGame } from './game/game';
 import { postToFlutter, type InitPayload } from './game/bridge';
+import { fetchRunnerSettings } from './game/settings';
 
 export default function RunnerPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -58,12 +59,43 @@ export default function RunnerPage() {
       forceGameOver: () => game.forceGameOver(),
     };
 
+    // Fetch admin tunables directly from the Cloud Function in
+    // parallel with the rest of init. Decouples settings from the
+    // Flutter release cycle — admins can tweak any value in
+    // /runnerAdmin → Tuning and the next run picks it up, no app
+    // rebuild needed. Also makes browser-only testing
+    // (localhost:3000/runner, admin.tapemembers.com/runner in a
+    // tab) work fully — no Flutter required.
+    //
+    // The game starts immediately with built-in defaults; when
+    // this promise resolves it calls init() to overwrite them.
+    // Failure (CORS / network / 500) is silent — fetchRunnerSettings
+    // resolves to {} on any error, which leaves the defaults intact.
+    //
+    // Flutter (if present) calls init() independently with its own
+    // payload. The two calls are idempotent per-field — last write
+    // wins. In practice both sources read the same Firestore doc
+    // so the result is identical.
+    let cancelled = false;
+    fetchRunnerSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        if (Object.keys(settings).length === 0) return;
+        game.init({ settings });
+      })
+      .catch(() => {
+        // fetchRunnerSettings never rejects, but TS doesn't know that
+        // — keep the no-op catch so a future change can't accidentally
+        // unhandle a rejection.
+      });
+
     // Tell Flutter we're ready to receive init. Flutter waits on
     // this before pushing user settings — avoids a race where
     // settings arrive before the game class exists.
     postToFlutter({ type: 'ready', version: 2 });
 
     return () => {
+      cancelled = true;
       game.dispose();
       delete window.tapeRunner;
       document.documentElement.style.overflow = prevHtml.overflow;
