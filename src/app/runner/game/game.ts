@@ -136,21 +136,33 @@ export class RunnerGame {
   private playerMixer?: THREE.AnimationMixer;
   private playerRunAction?: THREE.AnimationAction;
   /**
-   * Cached references to the player's leg + arm + spine bones,
-   * looked up by name once after the character FBX loads. Used
-   * by `applyAdditiveJumpPose` in the update loop to layer a
-   * procedural jump pose on top of the running animation while
-   * the collider is airborne.
-   *
-   * Why procedural instead of a Mixamo jump clip: cross-file
-   * animation retargeting against a multi-SkinnedMesh Mixamo
-   * character export hits enough Three.js library edge cases
-   * (bone-name collisions, bind-pose mismatch, retargetClip
-   * side-effect mutations on scale, missing-root-bone skeletons)
-   * that the time-to-correctness exceeded the value. A simple
-   * additive rotation pose driven by airtime intensity costs
-   * 8 bone lookups + a few quaternion writes per frame and has
-   * predictable behaviour.
+   * Mixamo Jump clip loaded from `/models/runner_jump.fbx`.
+   * Animation-only export, ~375 KB. Root-motion stripped after
+   * load so the clip is pure pose change (our collider already
+   * arcs vertically via `playerY`).
+   */
+  private playerJumpClip?: THREE.AnimationClip;
+  /**
+   * One action per SkinnedMesh, all sharing the same jump clip
+   * but each scoped to its mesh's specific skeleton. Per-mesh
+   * scoping forces PropertyBinding to look up bones through
+   * `mesh.skeleton.getBoneByName(...)` (unambiguous, GPU-bound)
+   * rather than the scene-graph name search that hits the 5
+   * duplicate Object3Ds named `mixamorig7Hips`.
+   */
+  private playerJumpActions: THREE.AnimationAction[] = [];
+  /**
+   * Edge detector for the run↔jump landing crossfade. Set true
+   * each frame the player is off the ground; flips false on the
+   * frame they touch down, which fires the fade-back-to-run.
+   */
+  private wasInAir = false;
+  /**
+   * Cached references to the player's leg + arm + spine bones —
+   * used by `applyAdditiveJumpPose` as a FALLBACK procedural
+   * animation only when the clip-driven jump action couldn't be
+   * wired (e.g. FBX load failed). When jump actions exist, this
+   * is left untouched.
    */
   private jumpPoseBones: THREE.Bone[] = [];
   /** True while we're showing the capsule fallback. Flips false
@@ -497,6 +509,96 @@ export class RunnerGame {
     // bouncers that spawn before it lands use the procedural
     // humanoid fallback automatically.
     this.loadBouncerModel();
+    this.loadJumpClip();
+  }
+
+  /**
+   * Load the standalone Mixamo Jump clip and zero its hip
+   * translation tracks (the clip moves the body ~1m vertically;
+   * our collider already arcs via `playerY`, so leaving them
+   * intact double-stacks). Once both the clip AND a rigged
+   * player are in place, `setupJumpAction` wires the actions.
+   */
+  private async loadJumpClip() {
+    try {
+      const fbx = await new FBXLoader().loadAsync('/models/runner_jump.fbx');
+      const raw = (fbx.animations as THREE.AnimationClip[])?.[0];
+      if (!raw) return;
+      this.playerJumpClip = this.stripRootPositionTracks(raw);
+      if (this.playerMixer && this.playerVisual) this.setupJumpAction();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.debug('[runner] jump clip load failed', e);
+    }
+  }
+
+  /**
+   * Return a copy of `clip` with every root-bone (Hips / Root)
+   * position track zero'd. Quaternion + scale tracks pass through
+   * unchanged. Used to prevent the Jump clip's hip Y-translation
+   * from stacking on top of our collider's `playerY` arc.
+   */
+  private stripRootPositionTracks(
+    clip: THREE.AnimationClip,
+  ): THREE.AnimationClip {
+    const isRoot = (name: string) => {
+      if (!name.endsWith('.position')) return false;
+      const bone = name.split('.')[0].toLowerCase();
+      return bone.includes('hip') || bone === 'root' || bone.endsWith('|root');
+    };
+    const newTracks = clip.tracks.map((t) => {
+      if (!isRoot(t.name)) return t;
+      const values = new Float32Array(t.values);
+      for (let i = 0; i < values.length; i += 3) {
+        values[i] = 0;
+        values[i + 1] = 0;
+        values[i + 2] = 0;
+      }
+      return new THREE.VectorKeyframeTrack(
+        t.name,
+        Array.from(t.times),
+        Array.from(values),
+      );
+    });
+    return new THREE.AnimationClip(
+      clip.name + '_inplace',
+      clip.duration,
+      newTracks,
+    );
+  }
+
+  /**
+   * Per-SkinnedMesh `clipAction(clip, mesh)` — passing the mesh
+   * as the binding root forces PropertyBinding to look up bones
+   * via `mesh.skeleton.getBoneByName(...)` instead of the
+   * ambiguous scene-graph name search. Each mesh gets its own
+   * action so every separate skeleton gets driven.
+   *
+   * Critical: use `enabled = false` (NOT setEffectiveWeight(0))
+   * to hide the action until trigger. setEffectiveWeight sets
+   * `this.weight = 0` internally, which kills fadeIn (Three.js
+   * computes effective weight as `this.weight * interpolant`, so
+   * 0 × any ramp is 0 forever). With `enabled = false` the
+   * action stays at weight 1 but is short-circuited to 0
+   * contribution; reset() in the trigger re-enables and lets
+   * fadeIn ramp.
+   */
+  private setupJumpAction() {
+    if (this.playerJumpActions.length > 0) return;
+    if (!this.playerJumpClip || !this.playerMixer || !this.playerVisual) return;
+    const meshes: THREE.SkinnedMesh[] = [];
+    this.playerVisual.traverse((obj) => {
+      if (obj instanceof THREE.SkinnedMesh) meshes.push(obj);
+    });
+    if (meshes.length === 0) return;
+    for (const mesh of meshes) {
+      const action = this.playerMixer.clipAction(this.playerJumpClip, mesh);
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.play();
+      action.enabled = false;
+      this.playerJumpActions.push(action);
+    }
   }
 
   /**
@@ -894,6 +996,12 @@ export class RunnerGame {
     // Cached bone refs are per-character; clear them so the next
     // load's `cacheJumpPoseBones` re-finds them on the new visual.
     this.jumpPoseBones = [];
+    // Jump actions are mixer-owned (stopAllAction + uncacheRoot
+    // above already detached them). The clip itself
+    // (`playerJumpClip`) is intentionally NOT cleared — it's raw
+    // clip data that survives character swaps, freshly bound by
+    // setupJumpAction on the next load.
+    this.playerJumpActions = [];
     if (this.playerVisual) {
       this.playerVisual.removeFromParent();
       this.playerVisual.traverse((obj) => {
@@ -1234,6 +1342,38 @@ export class RunnerGame {
     this.startGameIfNotStarted();
     if (this.playerY > PLAYER.BASE_Y + 0.05) return; // already airborne
     this.playerVy = this.jumpVelocity;
+    this.triggerJumpAnimation();
+  }
+
+  /**
+   * Crossfade run → jump on takeoff. No-op if the jump clip
+   * hasn't loaded yet (procedural fallback in `applyAdditiveJumpPose`
+   * picks up that case during update).
+   *
+   * `timeScale` is sized so the clip plays in roughly the actual
+   * airtime: clipDuration ÷ predictedAirtime. With defaults
+   * (vy=8 m/s, gravity -25 m/s²) airtime ≈ 0.64 s and the clip
+   * is ~1.03 s, so timeScale ≈ 1.6.
+   */
+  private triggerJumpAnimation() {
+    const jumpActions = this.playerJumpActions;
+    const runAction = this.playerRunAction;
+    if (jumpActions.length === 0 || !runAction || !this.playerJumpClip) return;
+    const airtime = (2 * this.jumpVelocity) / Math.abs(PLAYER.GRAVITY);
+    const safeAirtime = Math.max(0.2, airtime);
+    const timeScale = this.playerJumpClip.duration / safeAirtime;
+    runAction.fadeOut(0.10);
+    for (const action of jumpActions) {
+      // reset() does the heavy lifting: enabled=true (undoes
+      // setup-time enabled=false AND a prior jump's fadeOut
+      // auto-disable), time=0 (restart clip at takeoff frame),
+      // stopFading (clears any prior fade interpolant).
+      action.reset();
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.timeScale = timeScale;
+      action.fadeIn(0.10);
+    }
   }
 
   /**
@@ -1339,6 +1479,21 @@ export class RunnerGame {
       this.player.position.y = this.playerY;
     }
     const grounded = this.playerY <= PLAYER.BASE_Y + 0.01;
+    // Landing edge — fires once on the frame the player touches
+    // down. Fade jump actions out + bring run back. enabled=true
+    // on the run is required because its fadeOut at takeoff
+    // auto-disabled it; without re-enabling, fadeIn does nothing.
+    if (grounded && this.wasInAir) {
+      this.wasInAir = false;
+      const jumpActions = this.playerJumpActions;
+      const runAction = this.playerRunAction;
+      if (jumpActions.length > 0 && runAction) {
+        for (const a of jumpActions) a.fadeOut(0.10);
+        runAction.enabled = true;
+        runAction.fadeIn(0.10);
+      }
+    }
+    if (!grounded) this.wasInAir = true;
     if (grounded) {
       const bobPhase = this.duration * (this.speed / this.startSpeed) * 8;
       this.player.position.y =
@@ -1374,7 +1529,13 @@ export class RunnerGame {
     // cached bones AFTER the mixer has written its values, so
     // the run cycle's quaternions act as the base and we add a
     // small "tuck + lean" delta scaled by airborne height.
-    if (!grounded) this.applyAdditiveJumpPose();
+    // Procedural jump pose — only fires as a fallback when the
+    // clip-based jump action isn't wired (FBX load failed, no
+    // SkinnedMeshes, etc.). When clip actions exist they handle
+    // the pose; this would just fight them.
+    if (!grounded && this.playerJumpActions.length === 0) {
+      this.applyAdditiveJumpPose();
+    }
 
     // ── Scroll floor stripes ──────────────────────────────────
     for (const s of this.floorStripes) {
