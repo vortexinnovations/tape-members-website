@@ -77,10 +77,7 @@ export class RunnerGame {
   private scene = new THREE.Scene();
   /**
    * Refs to the two non-pulsing scene lights so `init()` can scale
-   * their intensities at runtime (admin "brightness" knob). The
-   * colored point lights in `clubLights` are deliberately excluded
-   * — those are the rig's atmosphere, not the baseline illumination,
-   * and scaling them would wash out the brand colors.
+   * their intensities at runtime (admin "brightness" knob).
    */
   private ambientLight!: THREE.AmbientLight;
   private houseLight!: THREE.DirectionalLight;
@@ -88,6 +85,16 @@ export class RunnerGame {
    *  is relative to "stock" instead of compounding on each init(). */
   private readonly ambientBaseIntensity = 0.55;
   private readonly houseBaseIntensity = 0.35;
+  /**
+   * Live brightness multiplier — applied to the ambient + house
+   * lights in init(), and folded into each pulsing club-light
+   * intensity inside tickClubLights() so the moving rig actually
+   * gets brighter too. (Earlier version only scaled the ambient
+   * pair, which was ~5% of the total light budget — admin couldn't
+   * see any visible effect even at 3x. Bumping the colored rig too
+   * is the only way "make it brighter" actually does anything.)
+   */
+  private brightnessMultiplier = 1.0;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private clock = new THREE.Clock();
@@ -1386,10 +1393,13 @@ export class RunnerGame {
    * adds a sense of motion separate from the world scroll.
    */
   private tickClubLights(t: number) {
+    const brightness = this.brightnessMultiplier;
     for (const c of this.clubLights) {
       const phase = t * c.pulseHz * Math.PI * 2 + c.phase;
       const pulse = 0.75 + 0.40 * Math.sin(phase);
-      c.light.intensity = c.baseIntensity * pulse;
+      // Fold the admin brightness multiplier in here — applying it
+      // statically in init() would be overwritten on the next frame.
+      c.light.intensity = c.baseIntensity * pulse * brightness;
       // Drift along Z — different phase so each light moves
       // independently. Range is small (driftAmp units), so lights
       // sweep over the runway gently rather than flying around.
@@ -2595,12 +2605,20 @@ export class RunnerGame {
       }
 
       // ── Scene brightness ────────────────────────────────────
-      // Scales the ambient + directional "house" light intensities
-      // around their base values. Doesn't touch the colored point
-      // lights (they're rig atmosphere, not baseline illumination)
-      // so the brand palette stays intact. Clamped to [0.1, 3].
+      // Scales BOTH the dim baseline (ambient + directional house
+      // light) AND the pulsing colored club lights. Earlier we only
+      // scaled the dim pair — but those contribute ~5% of the scene
+      // illumination; the club rig's point lights at intensity 12-18
+      // dominate, so scaling only the ambient pair had no visible
+      // effect. The club-light scale is applied inside tickClubLights
+      // (it pulses every frame; static mutation here would be
+      // overwritten next frame).
+      //
+      // Clamped to [0.1, 5]. At 5x the colored rig hits intensity
+      // 60-90 — bright but not white-clipping the brand palette.
       if (typeof s.brightness === 'number' && Number.isFinite(s.brightness)) {
-        const b = Math.max(0.1, Math.min(3, s.brightness));
+        const b = Math.max(0.1, Math.min(5, s.brightness));
+        this.brightnessMultiplier = b;
         this.ambientLight.intensity = this.ambientBaseIntensity * b;
         this.houseLight.intensity = this.houseBaseIntensity * b;
       }

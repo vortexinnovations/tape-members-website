@@ -43,10 +43,11 @@ export type InitPayload = {
     buzzEffect?: number;
     // ── Scene brightness ────────────────────────────────────────
     /**
-     * Multiplier on the ambient + house-light intensities. 1.0 =
-     * stock dark-nightclub look, > 1 = brighter, < 1 = even darker.
-     * Doesn't touch the coloured point lights (atmosphere stays
-     * intact). Clamped to [0.1, 3] on the game side.
+     * Multiplier on the full scene lighting (ambient + house +
+     * pulsing coloured rig). 1.0 = stock dark-nightclub look, > 1 =
+     * brighter, < 1 = even darker. Clamped to [0.1, 5] on the game
+     * side. At 5x the colored rig hits intensity 60-90 without
+     * white-clipping the brand palette.
      */
     brightness?: number;
     // ── Spawn pacing (Three.js only) ────────────────────────────
