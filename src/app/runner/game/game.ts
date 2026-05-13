@@ -845,11 +845,52 @@ export class RunnerGame {
    */
   private pickRunClip(animations: THREE.AnimationClip[]): THREE.AnimationClip {
     const keywords = ['run', 'running', 'jog', 'walk'];
+    let clip: THREE.AnimationClip | undefined;
     for (const k of keywords) {
-      const match = animations.find((c) => c.name.toLowerCase().includes(k));
-      if (match) return match;
+      clip = animations.find((c) => c.name.toLowerCase().includes(k));
+      if (clip) break;
     }
-    return animations[0];
+    clip = clip ?? animations[0];
+    return this.stripRootForwardMotion(clip);
+  }
+
+  /**
+   * Strip the X + Z keyframes from any position track on the
+   * character's root bone, so the character runs IN PLACE even
+   * if the animation was exported without Mixamo's "In Place"
+   * checkbox. Keeps the Y component intact so natural hip bob
+   * is preserved.
+   *
+   * Matches anything that looks like a root: "Hips", "mixamorigHips",
+   * "Root", "Armature|root", etc. — broad enough to cover Mixamo +
+   * most other rigging conventions without false positives on
+   * non-root bones (knees, ankles, shoulders never contain "hip"
+   * or "root" in their canonical names).
+   */
+  private stripRootForwardMotion(
+    clip: THREE.AnimationClip,
+  ): THREE.AnimationClip {
+    const isRootPositionTrack = (name: string): boolean => {
+      if (!name.endsWith('.position')) return false;
+      const bone = name.split('.')[0].toLowerCase();
+      return bone.includes('hip') || bone === 'root' || bone.endsWith('|root');
+    };
+    // Clone keyframe values so we don't mutate a shared buffer.
+    const newTracks = clip.tracks.map((t) => {
+      if (!isRootPositionTrack(t.name)) return t;
+      const values = new Float32Array(t.values);
+      for (let i = 0; i < values.length; i += 3) {
+        values[i] = 0;       // X — strip forward/back
+        values[i + 2] = 0;   // Z — strip side-to-side drift
+        // values[i+1] (Y) is left alone — natural hip bob preserved
+      }
+      return new THREE.VectorKeyframeTrack(t.name, Array.from(t.times), Array.from(values));
+    });
+    return new THREE.AnimationClip(
+      clip.name + '_inplace',
+      clip.duration,
+      newTracks,
+    );
   }
 
   // ── Input ───────────────────────────────────────────────────────

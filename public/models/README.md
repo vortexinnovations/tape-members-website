@@ -19,14 +19,25 @@ the player just sees the simpler silhouette.
      evening-wear character
 3. **Animation** — click the **Animations** tab, search **"Running"**.
    Pick one that loops cleanly (the preview shows it looping).
-4. **Download settings**:
+4. **In Place: ON** — this is critical. With the Running animation
+   applied, check the **"In Place"** checkbox in the right-hand
+   panel. The character should be running on the spot in the
+   preview, not drifting forward. The game's world scrolls past a
+   stationary player, so any forward translation in the animation
+   would make the character fly off-screen.
+
+   (As a belt-and-braces safety net, the loader in `game.ts` also
+   strips X + Z root-bone position keyframes at runtime — see
+   `stripRootForwardMotion` — but it's still simpler to download
+   the right version.)
+5. **Download settings**:
    - Format: **glTF Binary (.glb)**
    - Skin: **With Skin**
    - Frames per Second: **30**
    - Keyframe Reduction: **None**
-5. Save as `runner_male.glb` / `runner_female.glb`
-6. Drop both into this folder
-7. Commit + deploy — `git add public/models/*.glb && vercel --prod`
+6. Save as `runner_male.glb` / `runner_female.glb`
+7. Drop both into this folder
+8. Commit + deploy — `git add public/models/*.glb && vercel --prod`
 
 ## License notes
 
