@@ -143,9 +143,13 @@ export function rollPickup(): PickupSpec {
 }
 
 // ── Obstacles ──────────────────────────────────────────────────────
-// All current obstacles are fail-on-hit (run-over death). Future
-// stumble / duck / blocker types will land in subsequent commits.
-export type ObstacleKind = 'speaker' | 'bouncer';
+// Three categories now:
+//   - speaker / bouncer — floor-level, kill on contact while grounded.
+//     Player dodges by jumping or changing lanes.
+//   - discoBall — ceiling-hung, kills only while airborne. Player
+//     dodges by NOT jumping (or by lane change). Inverted Y rule
+//     from the floor obstacles.
+export type ObstacleKind = 'speaker' | 'bouncer' | 'discoBall';
 
 export interface ObstacleSpec {
   kind: ObstacleKind;
@@ -154,6 +158,18 @@ export interface ObstacleSpec {
   height: number;
   depth: number;
   color: number;
+  /**
+   * Y position of the mesh CENTRE. Floor obstacles use height/2 so
+   * the base sits on the ground; ceiling-hung obstacles (disco ball)
+   * sit high enough that grounded players pass underneath safely.
+   */
+  baseY: number;
+  /**
+   * If true, collisions only register while the player is AIRBORNE.
+   * Disco balls use this — the "dodge" is staying on the ground.
+   * Floor obstacles default to false: jumping clears them.
+   */
+  airOnly: boolean;
   // Reason sent back to Flutter for the game-over panel headline.
   failReason: 'speakerHit' | 'bouncerHit';
 }
@@ -161,21 +177,43 @@ export interface ObstacleSpec {
 export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
   speaker: {
     kind: 'speaker',
-    weight: 1,
+    weight: 4,
     width: 0.9,
     height: 1.6,
     depth: 0.6,
     color: 0x1c1c1c,
+    baseY: 0.8,
+    airOnly: false,
     failReason: 'speakerHit',
   },
   bouncer: {
     kind: 'bouncer',
-    weight: 1,
+    weight: 4,
     width: 1.1,
     height: 1.95,
     depth: 0.7,
     color: 0x2a1010,
+    baseY: 0.975,
+    airOnly: false,
     failReason: 'bouncerHit',
+  },
+  discoBall: {
+    kind: 'discoBall',
+    weight: 2,
+    // Used as the ball's diameter (sphere radius = width/2).
+    width: 0.9,
+    height: 0.9,
+    depth: 0.9,
+    color: 0xddddff,
+    // Player jump apex is ~2.8m; ball centre at 3.4 with radius
+    // 0.45 → bottom at 2.95. Player's head clears the ball only
+    // while grounded.
+    baseY: 3.4,
+    airOnly: true,
+    // Reused — Flutter maps both speakerHit and bouncerHit (and
+    // implicitly discoBall) to GameOverReason.speakerHit today.
+    // Unique copy for disco-ball death is a polish item later.
+    failReason: 'speakerHit',
   },
 };
 

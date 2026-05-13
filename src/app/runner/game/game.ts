@@ -150,6 +150,22 @@ export class RunnerGame {
 
   private running = true;
   private gameOver = false;
+  /**
+   * False until the player's first swipe (or jump) lands. While
+   * false the world doesn't scroll, distance / score / duration
+   * don't tick, and obstacles / pickups don't spawn — the runway
+   * sits idle with the player running in place, behind the HUD's
+   * input-hint overlay. The first input flips this true, resets
+   * `duration` so the run starts at t=0, and dismisses the hint.
+   */
+  private gameStarted = false;
+  /**
+   * Animation clock used in the pre-game state (when `gameStarted`
+   * is still false). Keeps the player limb-swing and club lights
+   * alive while the world is frozen, without polluting `duration`
+   * (which feeds the validator's physics check).
+   */
+  private previewClock = 0;
   private rafId: number | null = null;
 
   // Init values pushed from Flutter (may be undefined if loaded
@@ -500,10 +516,12 @@ export class RunnerGame {
 
   private swipeLeft() {
     if (this.gameOver || !this.running) return;
+    this.startGameIfNotStarted();
     if (this.playerLane > 0) this.setLane(this.playerLane - 1);
   }
   private swipeRight() {
     if (this.gameOver || !this.running) return;
+    this.startGameIfNotStarted();
     if (this.playerLane < LANES.X.length - 1)
       this.setLane(this.playerLane + 1);
   }
@@ -520,8 +538,25 @@ export class RunnerGame {
   }
   private jump() {
     if (this.gameOver || !this.running) return;
+    this.startGameIfNotStarted();
     if (this.playerY > PLAYER.BASE_Y + 0.05) return; // already airborne
     this.playerVy = PLAYER.JUMP_VY;
+  }
+
+  /**
+   * Called by the swipe / jump handlers. The first call flips
+   * `gameStarted` true (which un-freezes the world tick in
+   * `update()`), resets `duration` so the run timer starts at 0,
+   * and tells the HUD to fade out the input-hint overlay.
+   * Subsequent calls are no-ops.
+   */
+  private startGameIfNotStarted() {
+    if (this.gameStarted) return;
+    this.gameStarted = true;
+    this.duration = 0;
+    this.distance = 0;
+    this.score = 0;
+    this.hud.hideInputHint();
   }
 
   // ── Game loop ───────────────────────────────────────────────────
@@ -539,6 +574,18 @@ export class RunnerGame {
 
   private update(dt: number) {
     if (this.gameOver) return;
+
+    // ── Pre-game: world is frozen, just animate the player + lights
+    // so the runway doesn't look dead while the input-hint overlay
+    // is up. `previewClock` is the cadence driver — independent of
+    // `duration` (which feeds the validator's physics check, so it
+    // must start at 0 the moment the player actually starts).
+    if (!this.gameStarted) {
+      this.previewClock += dt;
+      this.tickClubLights(this.previewClock);
+      this.runPlayerIdleAnimation(this.previewClock);
+      return;
+    }
 
     // ── World scroll + speed curve ────────────────────────────
     this.speed = Math.min(
@@ -661,13 +708,18 @@ export class RunnerGame {
     for (let i = this.obstacles.length - 1; i >= 0; i--) {
       const o = this.obstacles[i];
       o.mesh.position.z += scroll;
+      // Disco balls spin so the mirror-ball look feels alive — the
+      // metallic material picks up the moving club lights nicely.
+      if (o.spec.kind === 'discoBall') {
+        o.mesh.rotation.y += dt * 1.4;
+      }
       if (o.mesh.position.z > WORLD.DESPAWN_Z) {
         this.scene.remove(o.mesh);
         this.disposeMesh(o.mesh);
         this.obstacles.splice(i, 1);
         continue;
       }
-      if (this.intersectsPlayer(o.mesh, 1.0)) {
+      if (this.intersectsPlayer(o.mesh, 1.0, o.spec.airOnly)) {
         this.endGame(o.spec.failReason);
         return;
       }
@@ -729,6 +781,27 @@ export class RunnerGame {
       c.light.position.z =
         c.baseZ + Math.sin(t * c.pulseHz * 0.5 + c.phase) * c.driftAmp;
     }
+  }
+
+  /**
+   * Pre-game idle animation: the player runs in place. Same
+   * limb-swing + bob the in-game update uses, just with a fixed
+   * cadence (no speed multiplier — the world isn't actually
+   * moving yet). Keeps the runway feeling alive so the
+   * "SWIPE TO START" overlay doesn't sit over a frozen tableau.
+   */
+  private runPlayerIdleAnimation(t: number) {
+    const stridePhase = t * 5.5;
+    const armSwing = Math.sin(stridePhase) * 0.45;
+    const legSwing = Math.sin(stridePhase) * 0.40;
+    this.playerLimbs.armL.rotation.x = armSwing;
+    this.playerLimbs.armR.rotation.x = -armSwing;
+    this.playerLimbs.legL.rotation.x = -legSwing;
+    this.playerLimbs.legR.rotation.x = legSwing;
+    // Subtle bob — same range as the in-game run.
+    const bobPhase = t * 8;
+    this.player.position.y =
+      PLAYER.BASE_Y + Math.sin(bobPhase) * 0.07;
   }
 
   // ── Spawning ────────────────────────────────────────────────────
@@ -853,15 +926,51 @@ export class RunnerGame {
 
   private spawnObstacle() {
     const spec = rollObstacle();
-    const geo = new THREE.BoxGeometry(spec.width, spec.height, spec.depth);
+    let geo: THREE.BufferGeometry;
+    if (spec.kind === 'discoBall') {
+      // Sphere — diameter = spec.width. Higher poly count so the
+      // mirror-ball reflections from the club lights read crisply.
+      geo = new THREE.SphereGeometry(spec.width / 2, 20, 14);
+    } else {
+      geo = new THREE.BoxGeometry(spec.width, spec.height, spec.depth);
+    }
     const mat = new THREE.MeshStandardMaterial({
       color: spec.color,
-      roughness: 0.4,
-      metalness: spec.kind === 'speaker' ? 0.3 : 0.05,
+      roughness:
+        spec.kind === 'discoBall' ? 0.15 :
+        spec.kind === 'speaker' ? 0.4 : 0.5,
+      metalness:
+        spec.kind === 'discoBall' ? 0.9 :
+        spec.kind === 'speaker' ? 0.3 : 0.05,
+      // Disco ball gets faint emissive so it pops in the dark fog
+      // even when the club lights swing away.
+      emissive: spec.kind === 'discoBall' ? 0xffffff : 0x000000,
+      emissiveIntensity: spec.kind === 'discoBall' ? 0.12 : 0,
     });
     const mesh = new THREE.Mesh(geo, mat);
     const lane = Math.floor(Math.random() * LANES.X.length);
-    mesh.position.set(LANES.X[lane], spec.height / 2, WORLD.SPAWN_Z);
+    mesh.position.set(LANES.X[lane], spec.baseY, WORLD.SPAWN_Z);
+
+    // Disco ball: add a thin hanging cable above the ball so it
+    // reads visually as "suspended from the ceiling" rather than
+    // floating in mid-air. Parented to the mesh so it scrolls
+    // together. Also a slow rotation so the mirror-ball look feels
+    // alive.
+    if (spec.kind === 'discoBall') {
+      const cableLen = 2.4;
+      const cableGeo = new THREE.CylinderGeometry(0.025, 0.025, cableLen, 6);
+      const cableMat = new THREE.MeshBasicMaterial({ color: 0x666666 });
+      const cable = new THREE.Mesh(cableGeo, cableMat);
+      // Position cable above the ball (its centre relative to the
+      // ball centre is half the cable length + ball radius).
+      cable.position.y = spec.width / 2 + cableLen / 2;
+      mesh.add(cable);
+      // Tag for the per-frame rotation in update(). We just spin
+      // the parent mesh — the cable comes along, which means the
+      // cable's hang isn't perfectly static, but at this scale the
+      // wobble is invisible.
+      (mesh as THREE.Mesh & { _isDiscoBall?: boolean })._isDiscoBall = true;
+    }
     this.scene.add(mesh);
     this.obstacles.push({ mesh, spec });
   }
@@ -916,20 +1025,36 @@ export class RunnerGame {
   // ── Collision ─────────────────────────────────────────────────
 
   /**
-   * AABB collision check on X+Z, with a Y gate so jumping clears
-   * floor-level obstacles. `paddingScale` lets pickups (forgiving)
-   * use a wider collision than obstacles (tighter) — better game
-   * feel: bottles are easy to grab, speakers are easy to dodge.
+   * AABB collision check on X+Z, with a Y gate based on `airOnly`:
+   *   - airOnly=false (default): collide only when player is grounded.
+   *     Used for floor obstacles + pickups — jumping is the dodge.
+   *   - airOnly=true: collide only when player is airborne. Used for
+   *     ceiling-hung obstacles (disco ball) — running under is the
+   *     dodge; jumping into it kills.
+   *
+   * `paddingScale` lets pickups (forgiving) use a wider collision
+   * than obstacles (tighter) — bottles easy to grab, speakers easy
+   * to dodge.
    */
-  private intersectsPlayer(mesh: THREE.Mesh, paddingScale: number): boolean {
+  private intersectsPlayer(
+    mesh: THREE.Mesh,
+    paddingScale: number,
+    airOnly = false,
+  ): boolean {
     const oGeo = mesh.geometry as
       | THREE.BoxGeometry
-      | THREE.CylinderGeometry;
+      | THREE.CylinderGeometry
+      | THREE.SphereGeometry;
     let halfX: number;
     let halfZ: number;
     if (oGeo instanceof THREE.BoxGeometry) {
       halfX = (oGeo.parameters.width / 2) * WORLD.COLLISION_PADDING;
       halfZ = (oGeo.parameters.depth / 2) * WORLD.COLLISION_PADDING;
+    } else if (oGeo instanceof THREE.SphereGeometry) {
+      // Sphere — radius is the same in X and Z.
+      const r = oGeo.parameters.radius * WORLD.COLLISION_PADDING;
+      halfX = r;
+      halfZ = r;
     } else {
       // Cylinder — use radius for both X and Z.
       const r = oGeo.parameters.radiusTop * WORLD.COLLISION_PADDING;
@@ -944,8 +1069,14 @@ export class RunnerGame {
     const dz = Math.abs(mesh.position.z - this.player.position.z);
     if (dx > halfX + pHalfX) return false;
     if (dz > halfZ + pHalfZ) return false;
-    // Y check — only collide if player is on/near the ground.
-    if (this.player.position.y > 2.0) return false;
+    const airborne = this.player.position.y > 2.0;
+    if (airOnly) {
+      // Disco-ball rule: only collide when airborne (jumped into it).
+      if (!airborne) return false;
+    } else {
+      // Default floor rule: jumping clears the obstacle.
+      if (airborne) return false;
+    }
     return true;
   }
 

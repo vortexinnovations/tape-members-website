@@ -36,6 +36,12 @@ export class HUD {
    * it Just Works on the platforms we care about.
    */
   private blurOverlayEl: HTMLDivElement;
+  /**
+   * Pre-game tutorial overlay: three animated arrows (← ↑ →) and
+   * a "SWIPE TO START" label. Visible at game-start; fades out the
+   * moment the player's first swipe lands.
+   */
+  private inputHintEl: HTMLDivElement;
   private flashEl: HTMLDivElement;
   private flashTimer: number | null = null;
   private comboFadeTimer: number | null = null;
@@ -48,9 +54,9 @@ export class HUD {
   constructor(canvas: HTMLCanvasElement) {
     const parent = canvas.parentElement ?? document.body;
 
-    // Inject the keyframes for the danger-zone buzz pulse once.
-    // Idempotent — multiple HUDs in quick succession (e.g. play
-    // again → new HUD) won't duplicate.
+    // Inject the keyframes for the danger-zone buzz pulse + the
+    // input-hint arrows once. Idempotent — multiple HUDs in quick
+    // succession (e.g. play again → new HUD) won't duplicate.
     if (!document.getElementById('tape-runner-hud-keyframes')) {
       const style = document.createElement('style');
       style.id = 'tape-runner-hud-keyframes';
@@ -58,6 +64,22 @@ export class HUD {
         @keyframes tapeRunnerBuzzPulse {
           0%, 100% { transform: scale(1.0); filter: brightness(1.0); }
           50% { transform: scale(1.12); filter: brightness(1.4); }
+        }
+        @keyframes tapeRunnerHintLeft {
+          0%, 100% { transform: translateX(0); opacity: 0.55; }
+          50% { transform: translateX(-14px); opacity: 1.0; }
+        }
+        @keyframes tapeRunnerHintRight {
+          0%, 100% { transform: translateX(0); opacity: 0.55; }
+          50% { transform: translateX(14px); opacity: 1.0; }
+        }
+        @keyframes tapeRunnerHintUp {
+          0%, 100% { transform: translateY(0); opacity: 0.55; }
+          50% { transform: translateY(-14px); opacity: 1.0; }
+        }
+        @keyframes tapeRunnerHintLabel {
+          0%, 100% { opacity: 0.7; }
+          50% { opacity: 1.0; }
         }
       `;
       document.head.appendChild(style);
@@ -243,6 +265,111 @@ export class HUD {
     this.root.appendChild(this.flashEl);
 
     parent.appendChild(this.root);
+
+    // ── Input-hint overlay (pre-game tutorial) ───────────────────
+    // Three pulsing arrows (← ↑ →) above a "SWIPE TO START" label,
+    // centred on screen. Z-index above the buzz overlay AND the HUD
+    // chrome so it sits on top of everything during the wait state.
+    // RunnerGame calls hideInputHint() on the player's first swipe.
+    this.inputHintEl = document.createElement('div');
+    Object.assign(this.inputHintEl.style, {
+      position: 'absolute',
+      inset: '0',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      pointerEvents: 'none',
+      // Don't block the gesture handler on the canvas.
+      gap: '24px',
+      // Fade — we toggle opacity in show/hide.
+      opacity: '1',
+      transition: 'opacity 0.32s ease',
+      zIndex: '5',
+      // Soften the runway scene behind the hint a touch so the text
+      // is readable on top of moving lights.
+      background:
+        'radial-gradient(ellipse at center, rgba(0,0,0,0.50) 0%, rgba(0,0,0,0.25) 50%, transparent 80%)',
+      userSelect: 'none',
+      webkitUserSelect: 'none',
+    } satisfies Partial<CSSStyleDeclaration>);
+    // Arrow row.
+    const arrowRow = document.createElement('div');
+    Object.assign(arrowRow.style, {
+      display: 'flex',
+      gap: '48px',
+      alignItems: 'center',
+    });
+    const makeArrow = (
+      glyph: string,
+      keyframeName: string,
+      label: string,
+    ): HTMLDivElement => {
+      const wrap = document.createElement('div');
+      Object.assign(wrap.style, {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '6px',
+      });
+      const arrow = document.createElement('div');
+      arrow.textContent = glyph;
+      Object.assign(arrow.style, {
+        fontSize: '52px',
+        lineHeight: '1',
+        color: '#fff',
+        textShadow: '0 2px 12px rgba(0, 0, 0, 0.85)',
+        animation: `${keyframeName} 1.2s ease-in-out infinite`,
+      });
+      const sub = document.createElement('div');
+      sub.textContent = label;
+      Object.assign(sub.style, {
+        fontSize: '10px',
+        fontWeight: '700',
+        letterSpacing: '1.6px',
+        color: 'rgba(255, 255, 255, 0.7)',
+        textShadow: '0 1px 4px rgba(0, 0, 0, 0.8)',
+      });
+      wrap.appendChild(arrow);
+      wrap.appendChild(sub);
+      return wrap;
+    };
+    arrowRow.appendChild(makeArrow('←', 'tapeRunnerHintLeft', 'DODGE'));
+    arrowRow.appendChild(makeArrow('↑', 'tapeRunnerHintUp', 'JUMP'));
+    arrowRow.appendChild(makeArrow('→', 'tapeRunnerHintRight', 'DODGE'));
+    this.inputHintEl.appendChild(arrowRow);
+
+    const startLabel = document.createElement('div');
+    startLabel.textContent = 'SWIPE TO START';
+    Object.assign(startLabel.style, {
+      fontSize: '16px',
+      fontWeight: '800',
+      letterSpacing: '3.5px',
+      color: '#fff',
+      textShadow: '0 2px 10px rgba(0, 0, 0, 0.9)',
+      animation: 'tapeRunnerHintLabel 1.6s ease-in-out infinite',
+    });
+    this.inputHintEl.appendChild(startLabel);
+
+    parent.appendChild(this.inputHintEl);
+  }
+
+  /**
+   * Hide the pre-game tutorial overlay. Called by RunnerGame the
+   * moment the player's first swipe/jump lands. Fades out via CSS
+   * transition; the DOM node is left in place so subsequent runs
+   * (after game over) can show the hint again via `showInputHint`.
+   */
+  hideInputHint() {
+    this.inputHintEl.style.opacity = '0';
+  }
+
+  /**
+   * Show the pre-game tutorial overlay. Called when a new run starts
+   * (game restart) so the player gets the affordance again.
+   */
+  showInputHint() {
+    this.inputHintEl.style.opacity = '1';
   }
 
   setScore(n: number) {
@@ -359,6 +486,7 @@ export class HUD {
     this.root.remove();
     this.vignetteEl.remove();
     this.blurOverlayEl.remove();
+    this.inputHintEl.remove();
   }
 }
 
