@@ -613,27 +613,31 @@ export class RunnerGame {
     action.clampWhenFinished = true;
     this.playerJumpAction = action;
 
-    /* eslint-disable no-console */
-    const warmStart = performance.now();
     // Pre-warm GPU + animation state so the first jump doesn't
-    // hitch. Previous attempt rendered to a 1×1 off-screen target,
-    // but that's too small to force mipmap generation or full-
-    // resolution texture sampling — the GPU defers that work
-    // until the first canvas-resolution render, which is exactly
-    // what we're trying to avoid. Diagnostic showed frame 1 of
-    // the first jump took 886 ms with 1×1 pre-warm in place.
+    // hitch on the first canvas render. Three phases in order:
     //
-    // New strategy, in order:
     //   1. `renderer.initTexture(t)` for every texture on every
-    //      material of the jump character. This is the EXPLICIT
-    //      API for forcing a texture upload — calls texImage2D
-    //      under the hood, no render-pass required.
-    //   2. `renderer.compile(scene, camera)` for shader compile.
-    //   3. Pre-tick the mixer so the AnimationMixer's first-
-    //      binding pass + interpolant buffer alloc happen now.
-    //   4. Render to a CANVAS-SIZED off-screen target so any
-    //      remaining resolution-dependent work (mipmap building,
-    //      framebuffer-specific state) is exercised at full size.
+    //      material of the jump character — explicit texImage2D
+    //      upload, no render-pass required.
+    //   2. `await renderer.compileAsync(scene, camera)` for
+    //      shader compile + link. compileAsync uses
+    //      `KHR_parallel_shader_compile` to actually POLL until
+    //      shaders are GPU-ready (sync compile() only queues).
+    //      Mixer is also pre-ticked here so AnimationMixer's
+    //      first-binding pass happens now.
+    //   3. One real render to the canvas FBO with the jump
+    //      character visible — primes Chrome's canvas FBO state
+    //      cache (off-screen render targets use a different FBO
+    //      and don't fully warm the canvas path).
+    //
+    // Caveat: on desktop Chrome with ANGLE → D3D11 translation,
+    // even all of the above isn't enough to fully eliminate the
+    // first-frame hitch — ANGLE does additional D3D-side shader
+    // optimisation on first canvas draw that we can't control
+    // from JS. Mobile WebViews use native GLES drivers (no ANGLE)
+    // and don't have this problem. The runner's production
+    // target is the in-app WebView, so this is a dev-only
+    // wart.
 
     // 1. Force-upload every texture on the jump character.
     const seenTextures = new Set<THREE.Texture>();
@@ -684,9 +688,7 @@ export class RunnerGame {
     // shader program for every visible object has been confirmed
     // GPU-ready. This is the missing piece — previously we were
     // only doing the sync `compile()` which doesn't wait.
-    const compileAsyncStart = performance.now();
     await this.renderer.compileAsync(this.scene, this.camera);
-    const compileAsyncMs = performance.now() - compileAsyncStart;
 
     // 3. CRITICAL — render once to the CANVAS framebuffer itself.
     //    Off-screen WebGLRenderTarget renders use a different FBO,
@@ -705,9 +707,7 @@ export class RunnerGame {
     //    tick.
     const runnerWasVisible = this.playerVisual?.visible ?? true;
     if (this.playerVisual) this.playerVisual.visible = false;
-    const canvasRenderStart = performance.now();
     this.renderer.render(this.scene, this.camera);
-    const canvasRenderMs = performance.now() - canvasRenderStart;
     if (this.playerVisual) this.playerVisual.visible = runnerWasVisible;
 
     // Reset the action so the first real jump starts at frame 0.
@@ -715,13 +715,6 @@ export class RunnerGame {
     this.playerJumpAction.reset();
     // Hide again until the player jumps.
     model.visible = false;
-    console.log(
-      `[runner/jump-warm] install complete in ${(performance.now() - warmStart).toFixed(1)}ms ` +
-        `(uploaded ${seenTextures.size} textures, ` +
-        `compileAsync=${compileAsyncMs.toFixed(1)}ms, ` +
-        `canvas-warm=${canvasRenderMs.toFixed(1)}ms)`,
-    );
-    /* eslint-enable no-console */
   }
 
   /**
@@ -1481,8 +1474,6 @@ export class RunnerGame {
     if (!this.playerJumpVisual || !this.playerJumpAction || !this.playerVisual) {
       return;
     }
-    /* eslint-disable no-console */
-    const triggerStart = performance.now();
     // Swap visibility — instantaneous. Frame 0 of the Mixamo Jump
     // animation is the takeoff stance which lines up well with the
     // running pose, so the snap reads as motion blur rather than a
@@ -1500,22 +1491,7 @@ export class RunnerGame {
       this.playerJumpClipDuration / safeAirtime;
     this.playerJumpAction.reset();
     this.playerJumpAction.play();
-    console.log(
-      `[runner/jump] trigger ${this.jumpCount + 1}: ${(performance.now() - triggerStart).toFixed(2)}ms`,
-    );
-    this.jumpCount++;
-    // Log the next 10 frames' timings so we can see exactly when
-    // (and where) the first-jump hitch falls.
-    this.debugFramesRemaining = 10;
-    /* eslint-enable no-console */
   }
-
-  /** Counter of total jumps this session — used to label diagnostic
-   *  logs so we know which jump's frames are being timed. */
-  private jumpCount = 0;
-  /** Number of upcoming frames to log per-step timing for. Counts
-   *  down to 0 after each jump trigger. */
-  private debugFramesRemaining = 0;
 
   /**
    * Called by the swipe / jump handlers. The first call flips
@@ -1538,34 +1514,9 @@ export class RunnerGame {
   private start() {
     this.clock.start();
     const loop = () => {
-      const frameStart =
-        this.debugFramesRemaining > 0 ? performance.now() : 0;
       const dt = Math.min(0.05, this.clock.getDelta());
-      let updateMs = 0;
-      if (this.running) {
-        const uStart =
-          this.debugFramesRemaining > 0 ? performance.now() : 0;
-        this.update(dt);
-        if (this.debugFramesRemaining > 0) {
-          updateMs = performance.now() - uStart;
-        }
-      }
-      const renderStart =
-        this.debugFramesRemaining > 0 ? performance.now() : 0;
+      if (this.running) this.update(dt);
       this.renderer.render(this.scene, this.camera);
-      if (this.debugFramesRemaining > 0) {
-        const renderMs = performance.now() - renderStart;
-        const totalMs = performance.now() - frameStart;
-        // eslint-disable-next-line no-console
-        console.log(
-          `[runner/frame ${11 - this.debugFramesRemaining}/10] ` +
-            `update=${updateMs.toFixed(2)}ms ` +
-            `render=${renderMs.toFixed(2)}ms ` +
-            `total=${totalMs.toFixed(2)}ms ` +
-            `jumpVisible=${this.playerJumpVisual?.visible ?? 'n/a'}`,
-        );
-        this.debugFramesRemaining--;
-      }
       this.rafId = requestAnimationFrame(loop);
     };
     loop();
