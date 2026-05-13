@@ -613,18 +613,48 @@ export class RunnerGame {
     action.clampWhenFinished = true;
     this.playerJumpAction = action;
 
-    // Pre-warm shaders + texture uploads for the jump character.
-    // Otherwise the first jump hitches because Three.js compiles
-    // each unique material's WebGL program and uploads the
-    // SkinnedMesh's textures lazily on first render.
-    // `renderer.compile(scene, camera)` walks every VISIBLE
-    // object in `scene` and pre-creates their WebGL programs +
-    // pre-uploads their textures. To include the jump character
-    // (normally hidden), we flip it visible just for the compile
-    // call — no actual rendering happens, so the character doesn't
-    // appear on screen during the briefly-visible window.
+    // Pre-warm GPU + animation state so the first jump doesn't
+    // hitch. Three layers of first-use work to flush here:
+    //
+    //   1. Shader compile + link for each unique material.
+    //      Handled by `renderer.compile(scene, camera)`.
+    //   2. Texture upload to GPU memory — only happens during
+    //      an actual render call, NOT during compile().
+    //   3. AnimationMixer's first-tick PropertyBinding pass +
+    //      internal interpolant buffer allocation — only happens
+    //      on the first `mixer.update()` after `action.play()`.
+    //
+    // To cover all three in one shot we do a real one-frame
+    // render of the scene with the jump character visible, but
+    // redirect the output to a 1×1 off-screen render target so
+    // the user never sees the swap. The mixer is also pre-ticked
+    // once with the action playing so PropertyBindings resolve.
+    //
+    // Yes, this blocks the main thread for the duration of the
+    // render. But it happens once, during init (when the user is
+    // already in the input-hint "swipe to start" idle state), so
+    // it's invisible to gameplay.
     model.visible = true;
+    // Pre-tick the mixer so AnimationMixer's first-binding work
+    // happens now instead of on the first real jump.
+    this.playerJumpAction.play();
+    this.playerJumpMixer.update(0);
+    // Render once to an off-screen target. This forces ALL GPU
+    // initialization for the jump character (shaders, texture
+    // uploads, attribute buffer binding, etc.).
+    const prevTarget = this.renderer.getRenderTarget();
+    const warmTarget = new THREE.WebGLRenderTarget(1, 1);
+    this.renderer.setRenderTarget(warmTarget);
+    this.renderer.render(this.scene, this.camera);
+    this.renderer.setRenderTarget(prevTarget);
+    warmTarget.dispose();
+    // Reset the action so the first real jump starts at frame 0.
+    this.playerJumpAction.stop();
+    this.playerJumpAction.reset();
+    // Belt-and-braces: also run renderer.compile() in case the
+    // above missed any deferred shader work.
     this.renderer.compile(this.scene, this.camera);
+    // Hide again until the player jumps.
     model.visible = false;
   }
 
