@@ -78,6 +78,23 @@ export class RunnerGame {
 
   // Player + lane state
   private player!: THREE.Mesh;
+  /**
+   * Visible-but-non-collidable child group of `player`. Owns the
+   * humanoid silhouette (torso + head + arms + legs). Animated in
+   * the update loop — torso bobs, limbs swing in a run cycle.
+   */
+  private playerVisual!: THREE.Group;
+  /**
+   * Limb meshes referenced for the run-cycle animation. Same objects
+   * are already added to `playerVisual` — this is just a cache so
+   * the per-frame swing loop doesn't traverse the group.
+   */
+  private playerLimbs!: {
+    armL: THREE.Mesh;
+    armR: THREE.Mesh;
+    legL: THREE.Mesh;
+    legR: THREE.Mesh;
+  };
   private playerLane = 1;
   // Explicit `number` annotations — without them TS infers the
   // literal type `0` from LANE_X[1] (because LANES.X is `as const`)
@@ -317,20 +334,102 @@ export class RunnerGame {
       this.floorStripes.push(s);
     }
 
-    // Player — placeholder rounded box. Real character (Mixamo
-    // GLB with run animation) comes in a later commit.
-    const playerGeo = new THREE.BoxGeometry(
+    // ── Player — quick humanoid silhouette ──────────────────────
+    // Still placeholder geometry (no rigged Mixamo character yet),
+    // but reads as a person from a distance: torso capsule + head
+    // sphere + arms + legs. Outer mesh is an invisible collider
+    // sized to the original PLAYER.* dimensions so collision logic
+    // (intersectsPlayer) is unchanged. The visible children are
+    // animated via the existing run-bob in update().
+    const collisionGeo = new THREE.BoxGeometry(
       PLAYER.WIDTH,
       PLAYER.HEIGHT,
       PLAYER.DEPTH,
     );
-    const playerMat = new THREE.MeshStandardMaterial({
+    const collisionMat = new THREE.MeshBasicMaterial({ visible: false });
+    this.player = new THREE.Mesh(collisionGeo, collisionMat);
+    this.player.position.set(LANES.X[1], PLAYER.BASE_Y, 0);
+
+    // Brand-aligned palette: warm copper torso (matches the app's
+    // accent3), darker copper limbs, neutral head. Slight metallic
+    // so the club rig catches on them.
+    const torsoMat = new THREE.MeshStandardMaterial({
       color: 0xb87333,
-      roughness: 0.5,
+      roughness: 0.55,
+      metalness: 0.15,
+    });
+    const limbMat = new THREE.MeshStandardMaterial({
+      color: 0x6a4220,
+      roughness: 0.6,
+      metalness: 0.1,
+    });
+    const headMat = new THREE.MeshStandardMaterial({
+      color: 0xe5b885,
+      roughness: 0.45,
       metalness: 0.05,
     });
-    this.player = new THREE.Mesh(playerGeo, playerMat);
-    this.player.position.set(LANES.X[1], PLAYER.BASE_Y, 0);
+
+    const visual = new THREE.Group();
+
+    // Torso — tall capsule. Three.CapsuleGeometry available in
+    // recent Three.js builds (>= 0.140).
+    const torsoH = PLAYER.HEIGHT * 0.50;
+    const torsoR = PLAYER.WIDTH * 0.32;
+    const torso = new THREE.Mesh(
+      new THREE.CapsuleGeometry(torsoR, torsoH * 0.7, 4, 12),
+      torsoMat,
+    );
+    torso.position.y = PLAYER.HEIGHT * 0.55;
+    visual.add(torso);
+
+    // Head — sphere atop the torso.
+    const headR = PLAYER.WIDTH * 0.22;
+    const head = new THREE.Mesh(
+      new THREE.SphereGeometry(headR, 14, 12),
+      headMat,
+    );
+    head.position.y = PLAYER.HEIGHT * 0.93;
+    visual.add(head);
+
+    // Arms — slim capsules angled slightly outward. Static for now
+    // (real run animation cycle comes with the Mixamo upgrade).
+    const armH = PLAYER.HEIGHT * 0.42;
+    const armR = PLAYER.WIDTH * 0.10;
+    const armGeo = new THREE.CapsuleGeometry(armR, armH * 0.6, 3, 8);
+    const armOffsetX = PLAYER.WIDTH * 0.32;
+    const armY = PLAYER.HEIGHT * 0.55;
+    const armL = new THREE.Mesh(armGeo, limbMat);
+    armL.position.set(-armOffsetX, armY, 0);
+    armL.rotation.z = 0.18;
+    visual.add(armL);
+    const armR_ = new THREE.Mesh(armGeo, limbMat);
+    armR_.position.set(armOffsetX, armY, 0);
+    armR_.rotation.z = -0.18;
+    visual.add(armR_);
+
+    // Legs — capsules below the torso.
+    const legH = PLAYER.HEIGHT * 0.38;
+    const legR = PLAYER.WIDTH * 0.14;
+    const legGeo = new THREE.CapsuleGeometry(legR, legH * 0.55, 3, 8);
+    const legOffsetX = PLAYER.WIDTH * 0.18;
+    const legY = PLAYER.HEIGHT * 0.18;
+    const legL = new THREE.Mesh(legGeo, limbMat);
+    legL.position.set(-legOffsetX, legY, 0);
+    visual.add(legL);
+    const legR_ = new THREE.Mesh(legGeo, limbMat);
+    legR_.position.set(legOffsetX, legY, 0);
+    visual.add(legR_);
+
+    // Centre the visual group relative to the collider — the
+    // collider's local origin is its centre, so we offset the
+    // visual group down by half-height to put feet on the ground.
+    visual.position.y = -PLAYER.HEIGHT / 2;
+    // Cache references on the player object for the run-cycle
+    // animation in update().
+    this.player.add(visual);
+    this.playerVisual = visual;
+    this.playerLimbs = { armL, armR: armR_, legL, legR: legR_ };
+
     this.scene.add(this.player);
   }
 
@@ -499,10 +598,32 @@ export class RunnerGame {
       }
       this.player.position.y = this.playerY;
     }
-    if (this.playerY <= PLAYER.BASE_Y + 0.01) {
+    const grounded = this.playerY <= PLAYER.BASE_Y + 0.01;
+    if (grounded) {
       const bobPhase = this.duration * (this.speed / this.startSpeed) * 8;
       this.player.position.y =
         PLAYER.BASE_Y + Math.sin(bobPhase) * 0.07;
+      // Run-cycle limb swing. Arms and legs swing opposite to each
+      // other in pairs (left-arm + right-leg forward together, then
+      // swap). Phase is tied to player speed so the cadence speeds
+      // up as the world accelerates.
+      const stridePhase =
+        this.duration * (this.speed / this.startSpeed) * 5.5;
+      const armSwing = Math.sin(stridePhase) * 0.55;
+      const legSwing = Math.sin(stridePhase) * 0.45;
+      // Arms swing on the X axis (forward/back).
+      this.playerLimbs.armL.rotation.x = armSwing;
+      this.playerLimbs.armR.rotation.x = -armSwing;
+      // Legs swing opposite to arms.
+      this.playerLimbs.legL.rotation.x = -legSwing;
+      this.playerLimbs.legR.rotation.x = legSwing;
+    } else {
+      // In the air — tuck legs forward, arms back. Keeps a clean
+      // jump pose instead of mid-stride limbs frozen.
+      this.playerLimbs.legL.rotation.x = -0.6;
+      this.playerLimbs.legR.rotation.x = -0.6;
+      this.playerLimbs.armL.rotation.x = 0.5;
+      this.playerLimbs.armR.rotation.x = 0.5;
     }
 
     // ── Scroll floor stripes ──────────────────────────────────
