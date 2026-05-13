@@ -3053,14 +3053,31 @@ export class RunnerGame {
 
   /** Called by Flutter once the WebView mounts. */
   init(payload: InitPayload) {
-    this.userId = payload.userId;
-    const newGender = (payload.playerGender ?? '').toLowerCase();
-    // Rebuild the player visual when gender changes from the
-    // current value (or when arriving for the first time after the
-    // default empty-string build in buildScene).
-    if (newGender !== this.playerGender) {
-      this.playerGender = newGender as PlayerGender;
-      this.buildPlayerVisual(newGender);
+    // userId + playerGender only update when the payload EXPLICITLY
+    // provides them. There are two callers of init():
+    //
+    //   1. Flutter sends `{userId, playerGender, settings}` once
+    //      the WebView fires its `ready` message.
+    //   2. page.tsx sends `{settings}` (no userId, no playerGender)
+    //      when the getRunnerSettings Cloud Function fetch
+    //      resolves.
+    //
+    // These two race. If the Cloud-Function fetch resolves AFTER
+    // Flutter's init, and we treat `payload.playerGender ?? ''` as
+    // "set gender to empty", we clobber Flutter's 'female' back to
+    // '' (which the rest of the pipeline maps to 'male'). That's
+    // the intermittent "female sometimes shows as male" bug.
+    //
+    // Skip the field entirely when it's undefined on the payload
+    // — then both callers can co-exist without one resetting the
+    // other's value.
+    if (payload.userId !== undefined) this.userId = payload.userId;
+    if (payload.playerGender !== undefined) {
+      const newGender = payload.playerGender.toLowerCase();
+      if (newGender !== this.playerGender) {
+        this.playerGender = newGender as PlayerGender;
+        this.buildPlayerVisual(newGender);
+      }
     }
     if (payload.settings) {
       const s = payload.settings;
