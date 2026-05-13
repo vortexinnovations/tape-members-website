@@ -133,10 +133,10 @@ export class HUD {
     Object.assign(this.buzzWrap.style, {
       position: 'absolute',
       left: '50%',
-      // Sit just above the combo chip (which sits at 50px above
+      // Sit just above the combo chip (which sits at 80px above
       // safe-area). Combo chip is ~32px tall + ~10px gap → buzz
-      // bottom at safe-area + 95px.
-      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 95px)',
+      // bottom at safe-area + 125px.
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 125px)',
       transform: 'translateX(-50%)',
       display: 'flex',
       gap: '4px',
@@ -202,9 +202,9 @@ export class HUD {
     Object.assign(this.comboEl.style, {
       position: 'absolute',
       left: '50%',
-      // Combo chip sits just above the safe-area inset. Buzz bar
+      // Combo chip sits ~80 px above the safe-area inset. Buzz bar
       // floats ~45 px above this.
-      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 50px)',
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 80px)',
       transform: 'translateX(-50%) scale(0.85)',
       transformOrigin: 'center center',
       fontSize: '30px',
