@@ -9,11 +9,16 @@ runtime:
 | `runner_female.glb` | Player when `playerGender: 'female'` | ~870 KB |
 | `runner_jump_male.glb` | Jump animation character (male) | ~3 MB |
 | `runner_jump_female.glb` | Jump animation character (female) | ~880 KB |
+| `runner_fall_male.glb` | Game-over fall animation character (male) | ~3 MB |
+| `runner_fall_female.glb` | Game-over fall animation character (female) | ~925 KB |
 | `runner_bouncer.glb` | Dancing-bouncer obstacle (shared across all sessions) | ~2.7 MB |
 
 If a player or jump file is missing, the game silently falls back
 to the in-code capsule-stack placeholder character (player) or the
-procedural additive-pose jump (jump). No errors, no broken state.
+procedural additive-pose jump (jump). If the fall file is missing,
+game-over fires immediately (no death animation) — same payload,
+just no on-screen collapse before Flutter's play-again sheet
+appears. No errors, no broken state in any of these fallback paths.
 
 ## Asset pipeline — converting from Mixamo
 
@@ -83,7 +88,8 @@ details.
 ## Implementation notes (for future maintainers)
 
 The loader (`game.ts` → `tryLoadGltfPlayer` for the running
-character, `loadJumpCharacter` for the jump character):
+character, `loadJumpCharacter` for the jump character,
+`loadFallCharacter` for the fall character):
 
 - auto-scales the model to match `PLAYER.HEIGHT` (1.8 m)
 - offsets the feet to the ground using foot-bone world-Y detection
@@ -91,18 +97,29 @@ character, `loadJumpCharacter` for the jump character):
   camera (running into the screen)
 - picks the first animation clip whose name contains
   "run" / "running" / "jog" / "walk" for the player; uses
-  `animations[0]` for the jump
+  `animations[0]` for the jump and the fall
 - strips root-bone X+Z position keyframes at runtime
   (`stripRootForwardMotion`) so the character stays put while
   the world scrolls past
 
-The jump character is rendered as a **separate visible entity**,
-not as a clip retargeted onto the running character — applying a
-Mixamo "without skin" clip to a "with skin" character produces
-twisted joints due to subtle bind-pose orientation differences.
-The two-characters approach sidesteps that entirely. Each FBX
-runs its own embedded animation against its own native skeleton.
-Visibility flips between the two on jump trigger / landing.
+The jump and fall characters are rendered as **separate visible
+entities**, not as clips retargeted onto the running character —
+applying a Mixamo "without skin" clip to a "with skin" character
+produces twisted joints due to subtle bind-pose orientation
+differences. The three-characters approach (run + jump + fall)
+sidesteps that entirely. Each GLB runs its own embedded animation
+against its own native skeleton. Visibility flips between them on
+jump trigger / landing / game-over.
+
+Game-over flow specifically: `endGame()` builds the payload, stashes
+it in `pendingGameOver`, flips `isFalling = true`, hides the runner,
+shows the fall character, and starts the fall action (LoopOnce +
+clampWhenFinished). The rAF loop keeps ticking `playerFallMixer`
+even though `running` is false. When the clip's `finished` event
+fires (`installFallCharacter` wires the listener), `postGameOverFromFall`
+ships the stashed payload to Flutter — which is what surfaces the
+play-again sheet. If the fall GLB never loaded, `endGame()` skips
+the death animation and posts immediately.
 
 If a different character source is used (Quaternius, Kenney,
 custom Blender export), make sure the model:

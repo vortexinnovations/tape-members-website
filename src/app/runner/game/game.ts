@@ -153,6 +153,25 @@ export class RunnerGame {
    *  the clip plays in roughly the actual airtime. */
   private playerJumpClipDuration = 1.0;
   /**
+   * The separate "falling" character — same pattern as the jump
+   * character. Plays once on game-over BEFORE we notify Flutter,
+   * so the player sees a death animation instead of an instant
+   * panel. The Flutter game-over panel only appears after the
+   * fall clip's `finished` event fires.
+   */
+  private playerFallVisual?: THREE.Group;
+  private playerFallMixer?: THREE.AnimationMixer;
+  private playerFallAction?: THREE.AnimationAction;
+  /** True while the fall animation is playing — between endGame()
+   *  triggering and the clip's `finished` event firing. While true,
+   *  the rAF loop ticks `playerFallMixer` even though `running` is
+   *  false. */
+  private isFalling = false;
+  /** Stash of the game-over payload computed at endGame() time so
+   *  we can re-emit it (with all the per-run telemetry intact)
+   *  when the fall animation finishes. */
+  private pendingGameOver?: GameOverMessage;
+  /**
    * Edge detector for the run↔jump landing swap. True each frame
    * the player is airborne; flips false on the frame they touch
    * down, which fires the swap-back-to-run-character.
@@ -176,6 +195,7 @@ export class RunnerGame {
    */
   private playerAssetReady = false;
   private jumpAssetReady = false;
+  private fallAssetReady = false;
   private assetsReady = false;
   private playerLane = 1;
   // Explicit `number` annotations — without them TS infers the
@@ -556,6 +576,14 @@ export class RunnerGame {
   private loadedJumpGender = '';
 
   /**
+   * Currently-loaded fall character's gender. Same role as
+   * `loadedJumpGender` — guards against duplicate loads when init()
+   * is called repeatedly with the same gender, and lets gender
+   * flips drop in-flight loads cleanly.
+   */
+  private loadedFallGender = '';
+
+  /**
    * Load the "jumping" character — a full Mixamo "with skin" FBX
    * carrying the Jump animation. Treated as a separate visible
    * entity that we swap visibility with the running character on
@@ -818,6 +846,213 @@ export class RunnerGame {
   }
 
   /**
+   * Load the "falling" character — full Mixamo "with skin" GLB
+   * carrying the death/fall animation. Mirrors `loadJumpCharacter`
+   * exactly: separate entity parented under the collider, swapped
+   * in via a visibility flip, runs its own embedded animation on
+   * its own native skeleton (sidesteps cross-FBX bind-pose drift
+   * the way the jump character does).
+   *
+   * Plays once on game-over. The Flutter game-over panel is only
+   * posted after the clip's `finished` event fires — so the player
+   * sees their character collapse before the play-again sheet
+   * appears.
+   *
+   * Gender-aware: `runner_fall_male.glb` for male/empty/other,
+   * `runner_fall_female.glb` for female. Disposes any previously
+   * loaded fall character before swapping.
+   */
+  private async loadFallCharacter(gender: string) {
+    const suffix = gender === 'female' ? 'female' : 'male';
+    // No-op if we already have this gender's fall character.
+    if (this.loadedFallGender === suffix && this.playerFallVisual) return;
+    // Tear down any previously-loaded fall character (other gender
+    // or stale instance).
+    this.disposeFallCharacter();
+    // Stake out this load so concurrent calls for the same gender
+    // don't double-fetch and concurrent calls for the OTHER gender
+    // know to bail when this one finishes.
+    this.loadedFallGender = suffix;
+    try {
+      const gltf = await new GLTFLoader().loadAsync(
+        `/models/runner_fall_${suffix}.glb`,
+      );
+      // If gender flipped while we were loading, drop this one on
+      // the floor — the newer load is in progress.
+      if (this.loadedFallGender !== suffix) return;
+      const clip = gltf.animations[0];
+      if (!clip) {
+        // eslint-disable-next-line no-console
+        console.debug(`[runner] fall glb (${suffix}) has no animations`);
+        this.loadedFallGender = '';
+        this.fallAssetReady = true;
+        this.checkAssetsReady();
+        return;
+      }
+      await this.installFallCharacter(gltf.scene, clip);
+      this.fallAssetReady = true;
+      this.checkAssetsReady();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.debug(`[runner] fall character (${suffix}) load failed`, e);
+      this.loadedFallGender = '';
+      // Fall is an enhancement, not a blocker — game-over still fires
+      // immediately when there's no fall character to play. Flag as
+      // "settled" so the loading overlay clears.
+      this.fallAssetReady = true;
+      this.checkAssetsReady();
+    }
+  }
+
+  /**
+   * Tear down the current fall character: remove from scene,
+   * dispose mixer, dispose geometries + materials + textures.
+   * Safe to call when nothing is loaded — it's a no-op.
+   */
+  private disposeFallCharacter() {
+    if (this.playerFallMixer) {
+      this.playerFallMixer.stopAllAction();
+      this.playerFallMixer.uncacheRoot(this.playerFallMixer.getRoot());
+      this.playerFallMixer = undefined;
+      this.playerFallAction = undefined;
+    }
+    if (this.playerFallVisual) {
+      this.playerFallVisual.removeFromParent();
+      this.playerFallVisual.traverse((obj) => {
+        if (obj instanceof THREE.Mesh || obj instanceof THREE.SkinnedMesh) {
+          obj.geometry.dispose();
+          const m = obj.material;
+          if (Array.isArray(m)) m.forEach((mat) => this.disposeMaterial(mat));
+          else this.disposeMaterial(m);
+        }
+      });
+      this.playerFallVisual = undefined;
+    }
+  }
+
+  /**
+   * Same pipeline as `installJumpCharacter` (scale + rotation +
+   * foot-alignment + LoopOnce action + pre-warm pass) PLUS one
+   * extra wire-up: a `finished` event listener on the mixer that
+   * fires `postGameOverFromFall()`, which is what actually pushes
+   * the game-over payload to Flutter.
+   */
+  private async installFallCharacter(
+    model: THREE.Group,
+    clip: THREE.AnimationClip,
+  ) {
+    // SkinnedMesh frustum-cull workaround — same as the running +
+    // jump characters.
+    model.traverse((obj) => {
+      if (obj instanceof THREE.SkinnedMesh) obj.frustumCulled = false;
+    });
+
+    // Scale to fit the collider.
+    const bbox = new THREE.Box3().setFromObject(model);
+    const rawHeight = Math.max(0.01, bbox.max.y - bbox.min.y);
+    const scale = PLAYER.HEIGHT / rawHeight;
+    model.scale.setScalar(scale);
+    // Mixamo characters face +Z; we want -Z (running into screen).
+    model.rotation.y = Math.PI;
+    // Drop into collider with feet at the bottom.
+    model.position.y = -PLAYER.HEIGHT / 2;
+    // Hidden until game-over.
+    model.visible = false;
+    this.player.add(model);
+    model.updateMatrixWorld(true);
+
+    // Foot-bone alignment so feet sit on the ground plane.
+    let lowestFootWorldY: number | null = null;
+    const probe = new THREE.Vector3();
+    model.traverse((obj) => {
+      if (!(obj instanceof THREE.Bone)) return;
+      const n = obj.name.toLowerCase();
+      if (n.includes('toe') || n.includes('foot') || n.includes('ankle')) {
+        obj.getWorldPosition(probe);
+        if (lowestFootWorldY === null || probe.y < lowestFootWorldY) {
+          lowestFootWorldY = probe.y;
+        }
+      }
+    });
+    if (lowestFootWorldY !== null) {
+      model.position.y += 0 - lowestFootWorldY;
+    }
+
+    this.playerFallVisual = model;
+
+    // Mixer + action setup. LoopOnce + clampWhenFinished so the
+    // character holds the final dead pose until restart() hides
+    // them. Mixer is only ticked while the fall character is
+    // visible (gated in the rAF loop by `isFalling`).
+    this.playerFallMixer = new THREE.AnimationMixer(model);
+    const action = this.playerFallMixer.clipAction(clip);
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+    this.playerFallAction = action;
+
+    // CRITICAL — wire the "animation done" → "ship game-over to
+    // Flutter" handoff. Without this listener, isFalling would
+    // never flip false and the game-over panel would never show.
+    this.playerFallMixer.addEventListener('finished', () => {
+      this.postGameOverFromFall();
+    });
+
+    // Pre-warm GPU + animation state so the first death doesn't
+    // hitch on the first canvas render. Same 3-phase pipeline as
+    // the jump character (see installJumpCharacter for the long
+    // explanation): initTexture → compileAsync → canvas FBO warm.
+
+    // 1. Force-upload every texture on the fall character.
+    const seenTextures = new Set<THREE.Texture>();
+    model.traverse((obj) => {
+      const meshObj = obj as THREE.Mesh;
+      if (!meshObj.material) return;
+      const mats = Array.isArray(meshObj.material)
+        ? meshObj.material
+        : [meshObj.material];
+      for (const mat of mats) {
+        for (const key of Object.keys(mat)) {
+          const value = (mat as unknown as Record<string, unknown>)[key];
+          if (
+            value &&
+            typeof value === 'object' &&
+            (value as THREE.Texture).isTexture &&
+            !seenTextures.has(value as THREE.Texture)
+          ) {
+            seenTextures.add(value as THREE.Texture);
+            this.renderer.initTexture(value as THREE.Texture);
+          }
+        }
+      }
+    });
+
+    // 2. Shader compile + link via compileAsync (KHR_parallel_shader_compile).
+    model.visible = true;
+    this.playerFallAction.play();
+    this.playerFallMixer.update(0);
+    await this.renderer.compileAsync(this.scene, this.camera);
+
+    // 3. One canvas FBO render with the fall character visible so
+    //    Chrome's canvas-path state is primed (off-screen FBO renders
+    //    don't fully prime it — see installJumpCharacter for the
+    //    detailed explanation of why ANGLE makes this necessary).
+    const runnerWasVisible = this.playerVisual?.visible ?? true;
+    if (this.playerVisual) this.playerVisual.visible = false;
+    this.renderer.render(this.scene, this.camera);
+    if (this.playerVisual) this.playerVisual.visible = runnerWasVisible;
+
+    // Reset the action so the first real death starts at frame 0,
+    // and clear any pre-warm 'finished' that fired during the prime
+    // render (compileAsync + render at update(0) shouldn't trip it,
+    // but defensive: postGameOverFromFall is a no-op when there's
+    // no pendingGameOver).
+    this.playerFallAction.stop();
+    this.playerFallAction.reset();
+    // Hide again until game-over.
+    model.visible = false;
+  }
+
+  /**
    * Cache references to the bones our procedural jump pose will
    * modify each frame. Looked up by name suffix so the same code
    * works whether bones are sanitized (mixamorig7Hips) or kept
@@ -933,9 +1168,10 @@ export class RunnerGame {
   private buildPlayerVisual(gender: string) {
     this.buildPlayerVisualPlaceholder(gender);
     // New gender → new assets → switch the HUD back into loading
-    // state until both finish.
+    // state until all three settle.
     this.playerAssetReady = false;
     this.jumpAssetReady = false;
+    this.fallAssetReady = false;
     this.assetsReady = false;
     this.hud.setLoading(true);
     // Fire-and-forget. If the GLB exists, it'll swap in shortly;
@@ -947,6 +1183,8 @@ export class RunnerGame {
     // is already loaded, so flicking gender back and forth via
     // init() doesn't re-fetch.
     this.loadJumpCharacter(gender);
+    // Same pattern for the fall character (game-over death animation).
+    this.loadFallCharacter(gender);
   }
 
   /**
@@ -958,7 +1196,8 @@ export class RunnerGame {
    */
   private checkAssetsReady() {
     if (this.assetsReady) return;
-    if (!this.playerAssetReady || !this.jumpAssetReady) return;
+    if (!this.playerAssetReady || !this.jumpAssetReady || !this.fallAssetReady)
+      return;
     this.assetsReady = true;
     this.hud.setLoading(false);
   }
@@ -1729,6 +1968,14 @@ export class RunnerGame {
     const loop = () => {
       const dt = Math.min(0.05, this.clock.getDelta());
       if (this.running) this.update(dt);
+      // Even after the run ends, keep ticking the fall mixer so the
+      // death animation plays through. `running` is false during the
+      // fall — but `isFalling` gates this tick independently. When
+      // the clip's `finished` event fires, postGameOverFromFall flips
+      // `isFalling` false, after which this branch is a no-op.
+      if (this.isFalling && this.playerFallMixer) {
+        this.playerFallMixer.update(dt);
+      }
       this.renderer.render(this.scene, this.camera);
       this.rafId = requestAnimationFrame(loop);
     };
@@ -3539,13 +3786,25 @@ export class RunnerGame {
       this.playerRunAction.play();
     }
     // Swap visibility back to the running character (in case
-    // game over happened mid-jump).
+    // game over happened mid-jump or the fall animation was still
+    // playing when Flutter pre-loaded the next run).
     if (this.playerVisual) this.playerVisual.visible = true;
     if (this.playerJumpVisual) {
       this.playerJumpVisual.visible = false;
       if (this.playerJumpAction) {
         this.playerJumpAction.stop();
         this.playerJumpAction.reset();
+      }
+    }
+    // Wipe any in-flight fall animation so the next death plays
+    // from frame 0 instead of resuming the last collapse.
+    this.isFalling = false;
+    this.pendingGameOver = undefined;
+    if (this.playerFallVisual) {
+      this.playerFallVisual.visible = false;
+      if (this.playerFallAction) {
+        this.playerFallAction.stop();
+        this.playerFallAction.reset();
       }
     }
 
@@ -3565,10 +3824,13 @@ export class RunnerGame {
     if (this.gameOver) return;
     this.gameOver = true;
     this.running = false;
-    // Drop the buzz blur overlay so the game-over panel renders crisp.
+    // Drop the buzz blur overlay so the fall animation reads crisp.
     this.hud.setBlur(0);
     const copy = this.resolveDeathCopy(reason);
-    postToFlutter({
+    // Build the payload now so all per-run counters (score, distance,
+    // peak combo/buzz, etc.) reflect the moment the run ended, not
+    // the moment the fall animation finishes.
+    const payload: GameOverMessage = {
       type: 'gameOver',
       score: Math.floor(this.score),
       distance: Math.floor(this.distance),
@@ -3581,7 +3843,48 @@ export class RunnerGame {
       reason,
       headline: copy.headline,
       subtitle: copy.subtitle,
-    });
+    };
+
+    // If the fall character is loaded, play the death animation
+    // first — Flutter only learns the run ended after the clip's
+    // `finished` event fires (handled by `postGameOverFromFall`).
+    //
+    // If the fall character failed to load or never existed,
+    // post immediately so the play-again sheet still surfaces.
+    if (this.playerFallVisual && this.playerFallAction && this.playerFallMixer) {
+      this.pendingGameOver = payload;
+      this.isFalling = true;
+      // Swap visibility: hide the runner + jump character, show
+      // the fall character. The collider's transform is unchanged
+      // — same lane, same Y — so the death plays at the player's
+      // last in-game position.
+      if (this.playerVisual) this.playerVisual.visible = false;
+      if (this.playerJumpVisual) this.playerJumpVisual.visible = false;
+      this.playerFallVisual.visible = true;
+      // Reset + play. clampWhenFinished holds the last pose until
+      // restart() flips visibility back.
+      this.playerFallAction.reset();
+      this.playerFallAction.play();
+    } else {
+      postToFlutter(payload);
+    }
+  }
+
+  /**
+   * Mixer 'finished' callback for the fall animation. Ships the
+   * stashed `pendingGameOver` payload to Flutter — which surfaces
+   * the play-again sheet — and clears the falling latch so the
+   * rAF loop stops ticking the fall mixer.
+   *
+   * Idempotent: a stray 'finished' event without a stashed payload
+   * is a no-op.
+   */
+  private postGameOverFromFall() {
+    if (!this.pendingGameOver) return;
+    const payload = this.pendingGameOver;
+    this.pendingGameOver = undefined;
+    this.isFalling = false;
+    postToFlutter(payload);
   }
 
   /**
@@ -3611,6 +3914,13 @@ export class RunnerGame {
     // GLB textures BEFORE the scene-wide traverse so the mixer's
     // bone references are released cleanly.
     this.disposePlayerVisualResources();
+    // The jump + fall characters live under `this.player` (the
+    // collider) and own their own SkinnedMesh geometry / materials
+    // / textures. Dispose explicitly so the scene-wide traverse
+    // below can't see a SkinnedMesh that's already been removed
+    // (which it would skip and leak).
+    this.disposeJumpCharacter();
+    this.disposeFallCharacter();
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh || obj instanceof THREE.Sprite) {
         // Sprites don't have geometry but do have material.
