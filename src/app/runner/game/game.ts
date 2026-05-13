@@ -1883,13 +1883,22 @@ export class RunnerGame {
     // ── Scroll pickups, check collection / pass ────────────────
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const p = this.pickups[i];
+      // Save pre-scroll z for the swept-CCD collision check. At
+      // high speed (max 22 m/s) per-frame scroll can exceed the
+      // combined collision window (~0.64 m for the smallest
+      // pickup) and the pickup would otherwise tunnel through the
+      // player without registering a hit.
+      const prevZ = p.mesh.position.z;
       p.mesh.position.z += scroll;
       // (No pickup rotation — the bottle silhouettes scroll past
       // facing the camera so labels stay readable. Champagne badges
       // specifically would orbit around the bottle centre under
       // rotation, swinging between visible and hidden.)
 
-      if (!p.resolved && this.intersectsPlayer(p.mesh, 0.6)) {
+      if (
+        !p.resolved &&
+        this.intersectsPlayer(p.mesh, 0.6, false, prevZ)
+      ) {
         this.collectPickup(p);
         p.resolved = true;
       }
@@ -3112,6 +3121,7 @@ export class RunnerGame {
     mesh: THREE.Mesh,
     paddingScale: number,
     airOnly = false,
+    prevZ?: number,
   ): boolean {
     const oGeo = mesh.geometry as
       | THREE.BoxGeometry
@@ -3138,9 +3148,30 @@ export class RunnerGame {
     const pHalfX = (PLAYER.WIDTH / 2) * WORLD.COLLISION_PADDING;
     const pHalfZ = (PLAYER.DEPTH / 2) * WORLD.COLLISION_PADDING;
     const dx = Math.abs(mesh.position.x - this.player.position.x);
-    const dz = Math.abs(mesh.position.z - this.player.position.z);
     if (dx > halfX + pHalfX) return false;
-    if (dz > halfZ + pHalfZ) return false;
+    // Z check — swept if `prevZ` is supplied (continuous-collision-
+    // detection mode, used by the pickup loop). Otherwise discrete.
+    //
+    // Why swept matters: at high speed the per-frame z scroll
+    // (speed × dt) can exceed the combined collision window
+    // (pickupHalfZ + playerHalfZ ≈ 0.32 m on each side for the
+    // smallest pickup). The pickup then jumps from "approaching" to
+    // "past" in one frame and the discrete check fires at neither
+    // sample point — a missed collection. Caller passes the pickup's
+    // pre-scroll z; we check whether the swept range [prevZ, currZ]
+    // intersects the player's z window at all.
+    const playerZ = this.player.position.z;
+    const playerMinZ = playerZ - pHalfZ - halfZ;
+    const playerMaxZ = playerZ + pHalfZ + halfZ;
+    if (prevZ !== undefined) {
+      const lo = Math.min(prevZ, mesh.position.z);
+      const hi = Math.max(prevZ, mesh.position.z);
+      if (hi < playerMinZ) return false;
+      if (lo > playerMaxZ) return false;
+    } else {
+      if (mesh.position.z < playerMinZ) return false;
+      if (mesh.position.z > playerMaxZ) return false;
+    }
     const airborne = this.player.position.y > 2.0;
     if (airOnly) {
       // Disco-ball rule: only collide when airborne (jumped into it).
