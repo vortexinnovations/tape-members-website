@@ -1218,16 +1218,88 @@ export class RunnerGame {
       return;
     }
 
-    for (const mesh of skinnedMeshes) {
+    // ── Deep diagnostic: print the player's skeletal anatomy so
+    // we can see why the binding fails (or doesn't). One log line
+    // per phase; user can paste them all.
+    /* eslint-disable no-console */
+    const trackNames = this.playerJumpClip.tracks.map((t) => t.name);
+    console.log(
+      `[runner/jump-debug] SkinnedMesh count: ${skinnedMeshes.length}`,
+    );
+    for (let i = 0; i < skinnedMeshes.length; i++) {
+      const sm = skinnedMeshes[i];
+      const skel = sm.skeleton;
+      const boneNames = skel
+        ? skel.bones.map((b) => b.name)
+        : ['(no skeleton)'];
+      console.log(
+        `[runner/jump-debug] sm[${i}] name="${sm.name}" ` +
+          `skeletonBones=${boneNames.length} first8=`,
+        boneNames.slice(0, 8),
+      );
+      // For three sample bone names from the jump clip, see if
+      // skeleton.getBoneByName resolves them. If it returns
+      // null/undefined, the SkinnedMesh's skeleton DOESN'T have a
+      // bone with that name → binding fails silently → T-pose.
+      const probes = ['mixamorig7Hips', 'mixamorig7Spine', 'mixamorig7Head'];
+      const probeResults: Record<string, string> = {};
+      for (const p of probes) {
+        const bone = skel?.getBoneByName(p);
+        probeResults[p] = bone
+          ? `bone (uuid=${bone.uuid.slice(0, 8)})`
+          : 'NOT FOUND';
+      }
+      console.log(`[runner/jump-debug] sm[${i}] probes:`, probeResults);
+    }
+    console.log(
+      `[runner/jump-debug] clip tracks count: ${trackNames.length}, first3=`,
+      trackNames.slice(0, 3),
+    );
+
+    // Now actually create the actions + verify each one bound.
+    // PropertyBinding.create looks up the target node when the
+    // binding is first realized (during update or play). We force
+    // a one-tick update at weight 1 to make the bindings resolve,
+    // then snapshot the result, then drop weight back to 0.
+    for (let i = 0; i < skinnedMeshes.length; i++) {
+      const mesh = skinnedMeshes[i];
       const action = this.playerMixer.clipAction(this.playerJumpClip, mesh);
       action.setLoop(THREE.LoopOnce, 1);
-      action.clampWhenFinished = true; // hold last frame after the leap
-      // Pre-roll: action starts in the "playing" pool with weight 0
-      // so fadeIn can lerp it up without a re-prime.
+      action.clampWhenFinished = true;
       action.play();
+      // Briefly crank to weight=1 + tick the mixer so the lazy
+      // PropertyBinding resolution happens. Then we inspect the
+      // bindings to see which targets actually resolved.
+      action.setEffectiveWeight(1);
+      this.playerMixer.update(0);
+      // The mixer caches bindings in an internal `_bindings` map
+      // (Three.js private API). Probe via the public Object3D
+      // tree instead: pick a bone we expect to be moving (Hips)
+      // and read its current rotation/position. If it differs
+      // from the bind pose, the binding worked.
+      const hipBone = mesh.skeleton?.getBoneByName('mixamorig7Hips');
+      const probeMsg = hipBone
+        ? `hipBone after tick: pos=(${hipBone.position.x.toFixed(3)},` +
+          `${hipBone.position.y.toFixed(3)},${hipBone.position.z.toFixed(3)}) ` +
+          `quat=(${hipBone.quaternion.x.toFixed(3)},${hipBone.quaternion.y.toFixed(3)},` +
+          `${hipBone.quaternion.z.toFixed(3)},${hipBone.quaternion.w.toFixed(3)})`
+        : 'no Hips bone in skeleton';
+      console.log(`[runner/jump-debug] sm[${i}] ${probeMsg}`);
+
       action.setEffectiveWeight(0);
       this.playerJumpActions.push(action);
     }
+    // Also pipe one summary line through the Flutter bridge so the
+    // user can grab it from the app without dev-tools.
+    postToFlutter({
+      type: 'log',
+      level: 'info',
+      message:
+        `jump-debug: sm=${skinnedMeshes.length} ` +
+        `actions=${this.playerJumpActions.length} ` +
+        `tracks=${trackNames.length}`,
+    });
+    /* eslint-enable no-console */
   }
 
   // ── Input ───────────────────────────────────────────────────────
