@@ -34,6 +34,21 @@ export type InitPayload = {
     // ── Buzz mechanic ───────────────────────────────────────────
     maxTipsyLevel?: number;
     tipsyDecaySeconds?: number;
+    /**
+     * Visual-effect intensity multiplier. 1.0 = stock, 0 = HUD-only
+     * buzz with no drunk visuals, > 1 = stronger drunk feel. Clamped
+     * to [0, 3] on the game side. Does NOT scale lane-change
+     * slowdown (gameplay knob — tuned separately).
+     */
+    buzzEffect?: number;
+    // ── Scene brightness ────────────────────────────────────────
+    /**
+     * Multiplier on the ambient + house-light intensities. 1.0 =
+     * stock dark-nightclub look, > 1 = brighter, < 1 = even darker.
+     * Doesn't touch the coloured point lights (atmosphere stays
+     * intact). Clamped to [0.1, 3] on the game side.
+     */
+    brightness?: number;
     // ── Spawn pacing (Three.js only) ────────────────────────────
     pickupIntervalSeconds?: number;
     obstacleIntervalSeconds?: number;

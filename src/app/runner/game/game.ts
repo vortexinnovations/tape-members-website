@@ -75,6 +75,19 @@ interface ActiveObstacle {
 export class RunnerGame {
   // Three.js core
   private scene = new THREE.Scene();
+  /**
+   * Refs to the two non-pulsing scene lights so `init()` can scale
+   * their intensities at runtime (admin "brightness" knob). The
+   * colored point lights in `clubLights` are deliberately excluded
+   * — those are the rig's atmosphere, not the baseline illumination,
+   * and scaling them would wash out the brand colors.
+   */
+  private ambientLight!: THREE.AmbientLight;
+  private houseLight!: THREE.DirectionalLight;
+  /** Base intensities cached at construction so brightness scaling
+   *  is relative to "stock" instead of compounding on each init(). */
+  private readonly ambientBaseIntensity = 0.55;
+  private readonly houseBaseIntensity = 0.35;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private clock = new THREE.Clock();
@@ -345,13 +358,19 @@ export class RunnerGame {
     // ── Lighting rig ────────────────────────────────────────────
     // Faint ambient so unlit faces of obstacles aren't pure black —
     // keeps the bottle silhouettes readable in the dark.
-    const ambient = new THREE.AmbientLight(0x2a1428, 0.55);
-    this.scene.add(ambient);
+    this.ambientLight = new THREE.AmbientLight(
+      0x2a1428,
+      this.ambientBaseIntensity,
+    );
+    this.scene.add(this.ambientLight);
     // Soft warm "house lights" overall directional — enough to read
     // the player and floor without washing out the colored rig.
-    const house = new THREE.DirectionalLight(0xfff3e0, 0.35);
-    house.position.set(0, 12, 2);
-    this.scene.add(house);
+    this.houseLight = new THREE.DirectionalLight(
+      0xfff3e0,
+      this.houseBaseIntensity,
+    );
+    this.houseLight.position.set(0, 12, 2);
+    this.scene.add(this.houseLight);
 
     // Three colored point lights drifting along the runway. Each
     // pulses on its own frequency — feels "live" not synchronised.
@@ -2564,6 +2583,26 @@ export class RunnerGame {
       if (typeof s.maxTipsyLevel === 'number' && s.maxTipsyLevel >= 2) {
         this.buzz.setMaxLevel(s.maxTipsyLevel);
         this.hud.setBuzzMaxLevel(s.maxTipsyLevel);
+      }
+
+      // ── Drunk-effect intensity multiplier ───────────────────
+      // Scales the visual side of buzz only (vignette, blur,
+      // sway, FOV-offset). 1.0 = stock, 0 = HUD-only buzz with
+      // no drunk visuals, > 1 = stronger drunk feel. Lane-change
+      // slowdown stays untouched — that's gameplay, not visuals.
+      if (typeof s.buzzEffect === 'number') {
+        this.buzz.setEffectMultiplier(s.buzzEffect);
+      }
+
+      // ── Scene brightness ────────────────────────────────────
+      // Scales the ambient + directional "house" light intensities
+      // around their base values. Doesn't touch the colored point
+      // lights (they're rig atmosphere, not baseline illumination)
+      // so the brand palette stays intact. Clamped to [0.1, 3].
+      if (typeof s.brightness === 'number' && Number.isFinite(s.brightness)) {
+        const b = Math.max(0.1, Math.min(3, s.brightness));
+        this.ambientLight.intensity = this.ambientBaseIntensity * b;
+        this.houseLight.intensity = this.houseBaseIntensity * b;
       }
 
       // ── Combo tier overrides ───────────────────────────────

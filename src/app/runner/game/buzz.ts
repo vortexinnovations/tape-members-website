@@ -37,10 +37,32 @@ export class Buzz {
   private maxLevel: number = BUZZ.MAX_LEVEL;
   /** Generated effects table — one entry per level 0..maxLevel. */
   private effects: BuzzEffectParams[] = BUZZ.EFFECTS as BuzzEffectParams[];
+  /**
+   * Admin-tunable multiplier on the VISUAL drunk effects (vignette,
+   * blur, sway, FOV-offset). 1.0 = stock intensity, 0 = effects
+   * fully disabled even at max buzz, > 1 = stronger drunk feel.
+   * Does NOT scale `laneSlowFactor` — that's a gameplay knob the
+   * admin can already tune separately via the lane-change timing
+   * setting, and combining the two scalars makes "drunk" hard to
+   * reason about.
+   */
+  private effectMultiplier = 1.0;
 
   /** Override the per-level decay time. Called by RunnerGame.init(). */
   setDecaySeconds(s: number) {
     if (Number.isFinite(s) && s > 0) this.decaySeconds = s;
+  }
+
+  /**
+   * Set the visual-effect multiplier. Clamped to [0, 3]:
+   * - 0   → no drunk visuals ever (HUD-only buzz feedback)
+   * - 1   → stock intensity (default)
+   * - 1.5 → noticeably stronger
+   * - 3   → maximum exaggeration before the screen becomes unreadable
+   */
+  setEffectMultiplier(m: number) {
+    if (!Number.isFinite(m)) return;
+    this.effectMultiplier = Math.max(0, Math.min(3, m));
   }
 
   /**
@@ -157,17 +179,24 @@ export class Buzz {
    */
   getInterpolatedEffectParams(): BuzzEffectParams {
     const lv = Math.min(this.level, this.effects.length - 1);
-    if (lv === 0) return this.effects[0];
+    if (lv === 0) {
+      // Sober — vignette/blur/sway/fovOffset are all 0 here, so the
+      // multiplier is a no-op. Returning the stock entry is fine.
+      return this.effects[0];
+    }
     const a = this.effects[lv];
     const b = this.effects[lv - 1];
     // 0 right after a pickup, → 1 just before the next decay tick.
     const t = Math.min(1, this.decayAccum / this.decaySeconds);
+    const m = this.effectMultiplier;
     return {
-      vignette: lerp(a.vignette, b.vignette, t),
-      blur: lerp(a.blur, b.blur, t),
-      sway: lerp(a.sway, b.sway, t),
+      vignette: lerp(a.vignette, b.vignette, t) * m,
+      blur: lerp(a.blur, b.blur, t) * m,
+      sway: lerp(a.sway, b.sway, t) * m,
+      // laneSlowFactor stays unscaled — see comment on
+      // effectMultiplier. It's a gameplay knob, not a visual one.
       laneSlowFactor: lerp(a.laneSlowFactor, b.laneSlowFactor, t),
-      fovOffset: lerp(a.fovOffset, b.fovOffset, t),
+      fovOffset: lerp(a.fovOffset, b.fovOffset, t) * m,
     };
   }
 }
