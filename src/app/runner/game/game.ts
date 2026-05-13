@@ -822,6 +822,9 @@ export class RunnerGame {
       spec.kind === 'magnum' ||
       spec.kind === 'methuselah';
 
+    // Default body material for the generic (vodka / water) bottles.
+    // Overridden inside the isChampagne branch with dark Dom-Pérignon-
+    // Luminous glass tones.
     const bodyMat = new THREE.MeshStandardMaterial({
       color: spec.color,
       roughness: 0.30,
@@ -831,10 +834,32 @@ export class RunnerGame {
     });
 
     if (isChampagne) {
-      // Champagne silhouette: full-radius cylindrical body → sharp
-      // shoulder cone → narrow neck → gold foil wrap → cork mushroom.
-      // The shoulder is the defining feature (vodka / water bottles
-      // taper gradually; champagne has a hard transition).
+      // Dom Pérignon Luminous-style silhouette: dark glass body
+      // (almost black with a faint green tint) + sharp shoulder
+      // cone + narrow neck + dark foil + black wire cage + glowing
+      // GREEN label band around the middle of the body. The label
+      // is what reads as "champagne" at a distance, since the body
+      // colour itself is the same near-black as the foil. Tier
+      // (champagne / magnum / methuselah) is signalled by size
+      // and — for methuselah only — the gold halo torus.
+
+      // Material overrides — dark glass body, dark foil, dark cage.
+      const glassMat = new THREE.MeshStandardMaterial({
+        color: 0x0c1a14,
+        roughness: 0.20,
+        metalness: 0.45,
+      });
+      const foilMat = new THREE.MeshStandardMaterial({
+        color: 0x141414,
+        roughness: 0.35,
+        metalness: 0.70,
+      });
+      const cageMat = new THREE.MeshStandardMaterial({
+        color: 0x2a2a2a,
+        roughness: 0.55,
+        metalness: 0.40,
+      });
+
       const bodyH = spec.height * 0.52;
       const shoulderH = spec.height * 0.14;
       const neckH = spec.height * 0.28;
@@ -844,38 +869,69 @@ export class RunnerGame {
 
       const body = new THREE.Mesh(
         new THREE.CylinderGeometry(spec.radius * 0.96, spec.radius, bodyH, 18),
-        bodyMat,
+        glassMat,
       );
       body.position.y = bodyH / 2;
       group.add(body);
 
+      // Glowing GREEN label band — slightly wider than the body so
+      // it visually layers on top. MeshBasicMaterial so it ignores
+      // scene lighting and stays bright in the dark fog (mirrors
+      // how Dom Pérignon Luminous bottles emit light from the
+      // label region rather than reflecting it).
+      const labelH = bodyH * 0.42;
+      const labelR = spec.radius * 1.015;
+      const labelMat = new THREE.MeshBasicMaterial({
+        color: 0x4cff9c,
+        transparent: true,
+        opacity: 0.85,
+      });
+      const label = new THREE.Mesh(
+        new THREE.CylinderGeometry(labelR * 0.98, labelR, labelH, 18, 1, true),
+        labelMat,
+      );
+      // Centred on the body, slightly below middle to match the
+      // real Dom Pérignon label position (lower 60% of the body).
+      label.position.y = bodyH * 0.38;
+      // Render after body so transparency composites cleanly.
+      label.renderOrder = 1;
+      group.add(label);
+
+      // Faint inner glow caps — close the cylinder ends so the
+      // label doesn't look hollow when viewed at oblique angles.
+      // These are tiny ring discs at top + bottom of the band.
+      const labelCapGeo = new THREE.RingGeometry(
+        labelR * 0.92,
+        labelR,
+        18,
+      );
+      const labelCapTop = new THREE.Mesh(labelCapGeo, labelMat);
+      labelCapTop.rotation.x = -Math.PI / 2;
+      labelCapTop.position.y = bodyH * 0.38 + labelH / 2;
+      group.add(labelCapTop);
+      const labelCapBottom = new THREE.Mesh(labelCapGeo, labelMat);
+      labelCapBottom.rotation.x = Math.PI / 2;
+      labelCapBottom.position.y = bodyH * 0.38 - labelH / 2;
+      group.add(labelCapBottom);
+
       // Shoulder — sharp taper from body radius down to neck radius.
       const shoulder = new THREE.Mesh(
         new THREE.CylinderGeometry(neckR, spec.radius * 0.96, shoulderH, 18),
-        bodyMat,
+        glassMat,
       );
       shoulder.position.y = bodyH + shoulderH / 2;
       group.add(shoulder);
 
-      // Neck — slim cylinder above the shoulder, same body colour
-      // so the bottle reads as one piece. Real champagne necks are
-      // the same dark glass; we keep the tinted body colour for
-      // gameplay readability.
+      // Neck — slim cylinder above the shoulder.
       const neck = new THREE.Mesh(
         new THREE.CylinderGeometry(neckR * 0.96, neckR, neckH, 12),
-        bodyMat,
+        glassMat,
       );
       neck.position.y = bodyH + shoulderH + neckH / 2;
       group.add(neck);
 
-      // Foil — gold wrap covering the upper portion of the neck.
-      // Slightly wider than the neck so it visually overlaps and
-      // reads as a separate material.
-      const foilMat = new THREE.MeshStandardMaterial({
-        color: 0xd9a23a,
-        roughness: 0.25,
-        metalness: 0.75,
-      });
+      // Foil — DARK metallic wrap covering the upper neck.
+      // Slightly wider than the neck so it visually layers on top.
       const foil = new THREE.Mesh(
         new THREE.CylinderGeometry(neckR * 1.12, neckR * 1.08, foilH, 12),
         foilMat,
@@ -883,15 +939,12 @@ export class RunnerGame {
       foil.position.y = bodyH + shoulderH + neckH - foilH / 2;
       group.add(foil);
 
-      // Cork mushroom — slightly wider at the top, tan colour.
-      const corkMat = new THREE.MeshStandardMaterial({
-        color: 0xb89060,
-        roughness: 0.85,
-        metalness: 0.05,
-      });
+      // Wire cage / cork mushroom — dark grey (Dom Pérignon uses
+      // a black wire cage over the cork, our placeholder is a
+      // textureless solid).
       const cork = new THREE.Mesh(
         new THREE.CylinderGeometry(neckR * 1.20, neckR * 0.98, corkH, 12),
-        corkMat,
+        cageMat,
       );
       cork.position.y = bodyH + shoulderH + neckH + corkH / 2;
       group.add(cork);
