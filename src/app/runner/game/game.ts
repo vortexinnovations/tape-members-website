@@ -25,6 +25,7 @@ import {
   type GLTF,
 } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 import {
   postToFlutter,
@@ -61,6 +62,11 @@ interface ActivePickup {
 interface ActiveObstacle {
   mesh: THREE.Mesh;
   spec: ObstacleSpec;
+  /** Per-instance AnimationMixer for bouncers (each plays the
+   *  dance loop at its own phase). Undefined for non-rigged
+   *  obstacles (speakers, disco balls) and for the procedural
+   *  bouncer fallback when the GLB hasn't loaded yet. */
+  mixer?: THREE.AnimationMixer;
 }
 
 // ── Game class ─────────────────────────────────────────────────────
@@ -151,6 +157,16 @@ export class RunnerGame {
    * disposed in dispose().
    */
   private champagneLabelTexture?: THREE.CanvasTexture;
+
+  /**
+   * Cached GLTF for the bouncer obstacle (dancing character). Loaded
+   * once on construction, then SkeletonUtils.clone'd per spawn so
+   * each bouncer instance has its own skeleton + independent
+   * AnimationMixer. Undefined while the load is in flight or if
+   * the file is missing — spawnObstacle falls back to the procedural
+   * capsule-stack humanoid in that case.
+   */
+  private bouncerGltf?: GLTF;
 
   // HUD overlay (DOM) — created on construction, owns vignette + counters.
   private hud: HUD;
@@ -420,6 +436,27 @@ export class RunnerGame {
     // Default visual — used until init() arrives with a real
     // playerGender. Treated as a neutral/male silhouette.
     this.buildPlayerVisual('');
+    // Kick off the async bouncer model load. It'll typically arrive
+    // before the first bouncer spawns (~1.6s into the run); any
+    // bouncers that spawn before it lands use the procedural
+    // humanoid fallback automatically.
+    this.loadBouncerModel();
+  }
+
+  /**
+   * One-shot load of the bouncer character GLB. Failure is silently
+   * swallowed — spawnObstacle's bouncer branch falls back to the
+   * procedural humanoid (capsule torso + sphere head + crossed
+   * arms) so the game keeps working without the model.
+   */
+  private async loadBouncerModel() {
+    try {
+      this.bouncerGltf =
+        await new GLTFLoader().loadAsync('/models/runner_bouncer.glb');
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.debug('[runner] bouncer model load failed', e);
+    }
   }
 
   /**
@@ -1238,9 +1275,31 @@ export class RunnerGame {
           | undefined;
         if (spinTarget) spinTarget.rotation.y += dt * 1.4;
       }
+      // Bouncers carry a per-instance AnimationMixer driving their
+      // dance loop. Tick each independently.
+      o.mixer?.update(dt);
       if (o.mesh.position.z > WORLD.DESPAWN_Z) {
         this.scene.remove(o.mesh);
-        this.disposeMesh(o.mesh);
+        // Stop the mixer + uncache the root before disposing so
+        // Three doesn't retain references in its action cache.
+        if (o.mixer) {
+          o.mixer.stopAllAction();
+          o.mixer.uncacheRoot(o.mixer.getRoot());
+        }
+        // For GLB-cloned bouncers, geometry + materials are SHARED
+        // across all clones via SkeletonUtils.clone. Disposing them
+        // on one despawn would break every other live bouncer.
+        // We only dispose the per-instance bits (the invisible
+        // collider's BoxGeometry + its MeshBasicMaterial) and let
+        // the shared GLTF resources stay alive until game dispose.
+        if (o.spec.kind === 'bouncer' && o.mixer) {
+          o.mesh.geometry.dispose();
+          const cm = o.mesh.material;
+          if (Array.isArray(cm)) cm.forEach((m) => m.dispose());
+          else cm.dispose();
+        } else {
+          this.disposeMesh(o.mesh);
+        }
         this.obstacles.splice(i, 1);
         continue;
       }
@@ -1849,11 +1908,15 @@ export class RunnerGame {
 
   private spawnObstacle() {
     const spec = this.rollAdjustedObstacle();
-    const mesh = this.buildObstacleMesh(spec);
+    const built = this.buildObstacleMesh(spec);
     const lane = Math.floor(Math.random() * LANES.X.length);
-    mesh.position.set(LANES.X[lane], spec.baseY, WORLD.SPAWN_Z);
-    this.scene.add(mesh);
-    this.obstacles.push({ mesh, spec });
+    built.mesh.position.set(LANES.X[lane], spec.baseY, WORLD.SPAWN_Z);
+    this.scene.add(built.mesh);
+    this.obstacles.push({
+      mesh: built.mesh,
+      spec,
+      mixer: built.mixer,
+    });
   }
 
   /**
@@ -1871,7 +1934,10 @@ export class RunnerGame {
    *   going up off-screen. Spin only touches the ball child so the
    *   cable stays vertical.
    */
-  private buildObstacleMesh(spec: ObstacleSpec): THREE.Mesh {
+  private buildObstacleMesh(spec: ObstacleSpec): {
+    mesh: THREE.Mesh;
+    mixer?: THREE.AnimationMixer;
+  } {
     if (spec.kind === 'discoBall') {
       // Invisible collider sphere — geometry only used for
       // intersectsPlayer's radius read.
@@ -1905,7 +1971,7 @@ export class RunnerGame {
       // Stash the spinning child so update() can find it without
       // assuming a specific children[] index.
       mesh.userData.spinTarget = ball;
-      return mesh;
+      return { mesh };
     }
 
     if (spec.kind === 'speaker') {
@@ -2028,13 +2094,67 @@ export class RunnerGame {
       );
       mesh.add(led);
 
-      return mesh;
+      return { mesh };
     }
 
     if (spec.kind === 'bouncer') {
-      // Bouncer — broad-shouldered humanoid in a dark suit with
-      // arms crossed in front. The collider stays a simple
-      // invisible Box (spec.width × spec.height × spec.depth) so
+      // GLB-backed bouncer — preferred path when the cached
+      // bouncer GLTF is loaded. Each spawn gets its own
+      // SkeletonUtils.clone so its dance animation runs on an
+      // independent skeleton + AnimationMixer (otherwise all
+      // bouncers would dance in perfect sync, which looks
+      // unnervingly mechanical).
+      const gltf = this.bouncerGltf;
+      if (gltf) {
+        const colliderGeo = new THREE.BoxGeometry(
+          spec.width,
+          spec.height,
+          spec.depth,
+        );
+        const colliderMat = new THREE.MeshBasicMaterial({ visible: false });
+        const mesh = new THREE.Mesh(colliderGeo, colliderMat);
+
+        // SkeletonUtils.clone produces an independent copy of the
+        // SkinnedMesh + its skeleton — required for per-instance
+        // animation. (A plain `gltf.scene.clone()` shares the
+        // skeleton, so every clone would play the dance at the
+        // same frame.)
+        const visual = cloneSkinned(gltf.scene);
+
+        // Auto-scale to fit the obstacle's nominal height.
+        const bbox = new THREE.Box3().setFromObject(visual);
+        const rawH = Math.max(0.01, bbox.max.y - bbox.min.y);
+        visual.scale.setScalar(spec.height / rawH);
+
+        // Face the camera (running player approaches from +Z) so
+        // the dance reads from the front, then drop into the
+        // collider with feet at the box's bottom.
+        visual.rotation.y = Math.PI;
+        visual.position.y = -spec.height / 2;
+        mesh.add(visual);
+
+        // Random start offset so every bouncer is at a different
+        // point in the dance loop. Otherwise the lineup of
+        // bouncers across spawns looks like a synced chorus.
+        if (gltf.animations.length > 0) {
+          const mixer = new THREE.AnimationMixer(visual);
+          const clip = gltf.animations[0];
+          const action = mixer.clipAction(clip);
+          action.setLoop(THREE.LoopRepeat, Infinity);
+          action.play();
+          // Advance to a random point in the loop so multiple
+          // bouncers on screen aren't all in sync.
+          mixer.setTime(Math.random() * clip.duration);
+          return { mesh, mixer };
+        }
+        return { mesh };
+      }
+
+      // ── Procedural fallback ─────────────────────────────────
+      // No GLB available yet (still loading, or load failed).
+      // Broad-shouldered humanoid in a dark suit with arms
+      // crossed in front. The collider stays a simple invisible
+      // Box (spec.width × spec.height × spec.depth) so
       // intersectsPlayer's AABB math is unchanged.
       const colliderGeo = new THREE.BoxGeometry(
         spec.width,
@@ -2166,7 +2286,7 @@ export class RunnerGame {
       // by half the collider height so feet sit on the ground.
       visual.position.y = -H / 2;
       mesh.add(visual);
-      return mesh;
+      return { mesh };
     }
 
     // Fallback — any future floor obstacle without specific geometry.
@@ -2176,7 +2296,7 @@ export class RunnerGame {
       roughness: 0.5,
       metalness: 0.05,
     });
-    return new THREE.Mesh(geo, mat);
+    return { mesh: new THREE.Mesh(geo, mat) };
   }
 
   // ── Pickup collection ─────────────────────────────────────────
@@ -2500,6 +2620,20 @@ export class RunnerGame {
     // bottle sprites; dispose it explicitly once the scene traversal
     // can't (since we hand the same texture to multiple materials).
     this.champagneLabelTexture?.dispose();
+    // Dispose the shared bouncer GLTF geometry/materials. By this
+    // point all bouncer clones have been removed from the scene, so
+    // there's nothing left referencing the shared resources.
+    if (this.bouncerGltf) {
+      this.bouncerGltf.scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh || obj instanceof THREE.SkinnedMesh) {
+          obj.geometry.dispose();
+          const m = obj.material;
+          if (Array.isArray(m)) m.forEach((mat) => this.disposeMaterial(mat));
+          else this.disposeMaterial(m);
+        }
+      });
+      this.bouncerGltf = undefined;
+    }
     this.renderer.dispose();
   }
 }
