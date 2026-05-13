@@ -328,10 +328,26 @@ export function comboMultiplier(combo: number): number {
 }
 
 // ── Spawn rates ────────────────────────────────────────────────────
-// Intervals scale inversely with speed (faster = more frequent).
+// Intervals scale inversely with speed (faster = more frequent), AND
+// ramp down linearly toward a minimum over the first `*_RAMP_S` seconds
+// of the run — so density builds with run length even at constant speed.
+// The two effects compound: late-run + high-speed pushes things up to,
+// but not past, the `*_INTERVAL_MIN_S` floor.
 export const SPAWN = {
   PICKUP_INTERVAL_BASE_S: 0.9,
   OBSTACLE_INTERVAL_BASE_S: 1.6,
+  /** How long it takes for the pickup spawn interval to reach
+   *  `PICKUP_INTERVAL_MIN_S` from `PICKUP_INTERVAL_BASE_S` (linear).
+   *  0 = no ramp (constant base interval, original behaviour). */
+  PICKUP_RAMP_S: 60,
+  /** Floor that the pickup interval can ramp down to. Also enforced
+   *  AFTER the speed-scaling multiplier so a max-speed late-game run
+   *  can't spawn a pickup every frame. */
+  PICKUP_INTERVAL_MIN_S: 0.45,
+  /** Same idea for obstacles — separately tunable from pickups so an
+   *  admin can balance the "more loot vs. more hazards" curve. */
+  OBSTACLE_RAMP_S: 60,
+  OBSTACLE_INTERVAL_MIN_S: 0.8,
   // When spawning, the spawner avoids placing a pickup and an
   // obstacle within the same Z window in the same lane. This is
   // the minimum Z separation between simultaneous spawns.

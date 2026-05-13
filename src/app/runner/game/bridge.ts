@@ -53,6 +53,24 @@ export type InitPayload = {
     // ── Spawn pacing (Three.js only) ────────────────────────────
     pickupIntervalSeconds?: number;
     obstacleIntervalSeconds?: number;
+    /**
+     * Progressive-density ramp. Each interval ramps linearly from
+     * its base value toward `*IntervalMinSeconds` over the first
+     * `*RampSeconds` seconds of the run, then holds at the min.
+     * Independent of the speed-scaling that's always applied (a
+     * fast late-game run still can't spawn faster than the floor).
+     *
+     * Set `*RampSeconds` to 0 to disable the ramp (constant base
+     * interval, modulated only by speed — original behaviour).
+     *
+     * `*IntervalMinSeconds` is clamped server-side to be ≤ the
+     * corresponding `*IntervalSeconds` so an admin can't invert
+     * the ramp direction.
+     */
+    pickupRampSeconds?: number;
+    pickupIntervalMinSeconds?: number;
+    obstacleRampSeconds?: number;
+    obstacleIntervalMinSeconds?: number;
     // ── Combo (Three.js only) ───────────────────────────────────
     comboWindowSeconds?: number;
     // Three tiers above the always-baseline (combo 0..tier2-1 = ×1.0).

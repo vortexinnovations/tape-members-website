@@ -282,6 +282,14 @@ export class RunnerGame {
   // inversely by current speed in the spawner.
   private pickupIntervalSeconds = SPAWN.PICKUP_INTERVAL_BASE_S;
   private obstacleIntervalSeconds = SPAWN.OBSTACLE_INTERVAL_BASE_S;
+  // Progressive-density ramp. Interval linearly interpolates from
+  // its base value toward `*IntervalMinSeconds` over the first
+  // `*RampSeconds` seconds of the run. 0 ramp = constant base
+  // interval (modulated only by speed — original behaviour).
+  private pickupRampSeconds = SPAWN.PICKUP_RAMP_S;
+  private pickupIntervalMinSeconds = SPAWN.PICKUP_INTERVAL_MIN_S;
+  private obstacleRampSeconds = SPAWN.OBSTACLE_RAMP_S;
+  private obstacleIntervalMinSeconds = SPAWN.OBSTACLE_INTERVAL_MIN_S;
   // Combo window — seconds since the last pickup to keep the chain.
   private comboWindowSeconds: number = COMBO.WINDOW_S;
   // Combo multiplier tiers — three thresholds + multipliers above
@@ -2224,12 +2232,42 @@ export class RunnerGame {
     }
 
     // ── Spawn pickups + obstacles ─────────────────────────────
+    // Two stacked effects on each interval:
+    //   1. TIME RAMP — linearly interpolate from base interval toward
+    //      `*IntervalMinSeconds` over the first `*RampSeconds` of the
+    //      run. Drives the "feels more intense as I go" curve while
+    //      keeping the early-game forgiving.
+    //   2. SPEED SCALE — multiply by `startSpeed / speed` so a faster
+    //      world also gets denser spawns (preserves the original
+    //      coupling — the spawner sees the same Z-space density even
+    //      when speed ramps).
+    //   3. FLOOR — final Math.max(intervalMin, ...) so high speed
+    //      late in the run can't push spawns below the cap.
     this.spawnAccumPickup += dt;
     this.spawnAccumObstacle += dt;
-    const pickupInterval =
-      this.pickupIntervalSeconds * (this.startSpeed / this.speed);
-    const obstacleInterval =
-      this.obstacleIntervalSeconds * (this.startSpeed / this.speed);
+    const speedScale = this.startSpeed / this.speed;
+    const pickupRampT =
+      this.pickupRampSeconds > 0
+        ? Math.min(1, this.duration / this.pickupRampSeconds)
+        : 0;
+    const pickupBase =
+      this.pickupIntervalSeconds * (1 - pickupRampT) +
+      this.pickupIntervalMinSeconds * pickupRampT;
+    const pickupInterval = Math.max(
+      this.pickupIntervalMinSeconds,
+      pickupBase * speedScale,
+    );
+    const obstacleRampT =
+      this.obstacleRampSeconds > 0
+        ? Math.min(1, this.duration / this.obstacleRampSeconds)
+        : 0;
+    const obstacleBase =
+      this.obstacleIntervalSeconds * (1 - obstacleRampT) +
+      this.obstacleIntervalMinSeconds * obstacleRampT;
+    const obstacleInterval = Math.max(
+      this.obstacleIntervalMinSeconds,
+      obstacleBase * speedScale,
+    );
     if (this.spawnAccumPickup >= pickupInterval) {
       this.spawnAccumPickup = 0;
       this.spawnPickup();
@@ -3575,6 +3613,39 @@ export class RunnerGame {
       if (typeof s.obstacleIntervalSeconds === 'number' && s.obstacleIntervalSeconds >= 0.1) {
         this.obstacleIntervalSeconds = s.obstacleIntervalSeconds;
       }
+      // Progressive-density ramp. Ramp seconds can be 0 (disabled);
+      // min intervals share the same 0.1s floor as the base intervals.
+      // After parsing, clamp min ≤ base so the ramp can't run backward
+      // (e.g. admin sets base=0.9, min=1.5 by mistake).
+      if (typeof s.pickupRampSeconds === 'number' && s.pickupRampSeconds >= 0) {
+        this.pickupRampSeconds = s.pickupRampSeconds;
+      }
+      if (
+        typeof s.pickupIntervalMinSeconds === 'number' &&
+        s.pickupIntervalMinSeconds >= 0.1
+      ) {
+        this.pickupIntervalMinSeconds = s.pickupIntervalMinSeconds;
+      }
+      if (typeof s.obstacleRampSeconds === 'number' && s.obstacleRampSeconds >= 0) {
+        this.obstacleRampSeconds = s.obstacleRampSeconds;
+      }
+      if (
+        typeof s.obstacleIntervalMinSeconds === 'number' &&
+        s.obstacleIntervalMinSeconds >= 0.1
+      ) {
+        this.obstacleIntervalMinSeconds = s.obstacleIntervalMinSeconds;
+      }
+      // Defensive: an admin shouldn't be able to set min > base
+      // (would make the ramp go the wrong direction — slower over
+      // time). Clamp on the way in so the spawn math is monotonic.
+      this.pickupIntervalMinSeconds = Math.min(
+        this.pickupIntervalMinSeconds,
+        this.pickupIntervalSeconds,
+      );
+      this.obstacleIntervalMinSeconds = Math.min(
+        this.obstacleIntervalMinSeconds,
+        this.obstacleIntervalSeconds,
+      );
 
       // ── Combo + player feel ─────────────────────────────────
       if (typeof s.comboWindowSeconds === 'number' && s.comboWindowSeconds > 0) {
