@@ -1916,6 +1916,13 @@ export class RunnerGame {
     // ── Scroll obstacles, check collisions ────────────────────
     for (let i = this.obstacles.length - 1; i >= 0; i--) {
       const o = this.obstacles[i];
+      // Save pre-scroll z so the swept-CCD collision check can
+      // catch the obstacle even when per-frame scroll exceeds the
+      // collision window. Same tunneling risk as pickups, just
+      // with the inverse player-impact (obstacle tunneling = lucky
+      // escape for the player), and the user wants consistent
+      // collision so high-speed obstacles register properly.
+      const obsPrevZ = o.mesh.position.z;
       o.mesh.position.z += scroll;
       // Disco balls spin so the mirror-ball look feels alive — but
       // we spin only the BALL child, not the whole obstacle mesh
@@ -1955,7 +1962,7 @@ export class RunnerGame {
         this.obstacles.splice(i, 1);
         continue;
       }
-      if (this.intersectsPlayer(o.mesh, 1.0, o.spec.airOnly)) {
+      if (this.intersectsPlayer(o.mesh, 1.0, o.spec.airOnly, obsPrevZ)) {
         this.endGame(o.spec.failReason);
         return;
       }
