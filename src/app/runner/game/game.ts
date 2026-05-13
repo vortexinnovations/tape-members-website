@@ -24,6 +24,7 @@ import {
   GLTFLoader,
   type GLTF,
 } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 
 import {
   postToFlutter,
@@ -742,51 +743,70 @@ export class RunnerGame {
   }
 
   /**
-   * Try to load a rigged Mixamo (or any glTF-binary) character
-   * from `/models/runner_<gender>.glb`. On success, dispose the
-   * placeholder visual and replace it with the GLB scene + an
-   * AnimationMixer that plays its run animation in a loop.
+   * Try to load a rigged character model from
+   * `/models/runner_<gender>.<ext>`. Tries FBX first (Mixamo's
+   * direct download format — no conversion needed) then GLB
+   * (smaller, in case the operator manually converts later).
    *
-   * On failure (404, network error, malformed file), silently
-   * stay on the placeholder. The user gets the capsule character
-   * while we wait for them to drop their Mixamo file in.
+   * On success, disposes the placeholder visual and replaces it
+   * with the loaded scene + an AnimationMixer that plays the run
+   * clip in a loop. On failure (404 / parse error for both
+   * formats), silently stays on the capsule placeholder.
    *
    * File requirements:
-   *   - glTF Binary (.glb)
-   *   - With Skin (export option in Mixamo)
+   *   - With Skin (Mixamo's default export option)
    *   - One or more animations included; we prefer any clip
    *     whose name contains "run" / "running"; otherwise we
    *     fall back to the first clip.
    *   - Origin at the character's feet (Mixamo default).
    */
   private async tryLoadGltfPlayer(gender: string) {
-    const url =
-      gender === 'female' ? '/models/runner_female.glb' : '/models/runner_male.glb';
-    const loader = new GLTFLoader();
-    let gltf: GLTF;
-    try {
-      gltf = await loader.loadAsync(url);
-    } catch (e) {
-      // 404, network, or parse error — placeholder stays. This is
-      // the expected state until the operator drops their Mixamo
-      // files into public/models/.
-      // Debug-log for development; not user-visible.
-      // eslint-disable-next-line no-console
-      console.debug(`[runner] no GLB at ${url} — keeping placeholder`, e);
-      return;
+    const suffix = gender === 'female' ? 'female' : 'male';
+    // FBX first — that's what Mixamo gives you directly, no
+    // conversion step required. GLB as a fallback for anyone who
+    // converts later (smaller files; FBX is ~10-20MB, GLB ~3-5MB).
+    const candidates: Array<{ url: string; format: 'fbx' | 'glb' }> = [
+      { url: `/models/runner_${suffix}.fbx`, format: 'fbx' },
+      { url: `/models/runner_${suffix}.glb`, format: 'glb' },
+    ];
+
+    let scene: THREE.Group | undefined;
+    let animations: THREE.AnimationClip[] = [];
+    for (const c of candidates) {
+      try {
+        if (c.format === 'glb') {
+          const gltf: GLTF = await new GLTFLoader().loadAsync(c.url);
+          scene = gltf.scene;
+          animations = gltf.animations;
+        } else {
+          // FBXLoader returns the scene as a Group directly; animations
+          // are on the returned object's `.animations` property.
+          const fbx = await new FBXLoader().loadAsync(c.url);
+          scene = fbx;
+          animations = (fbx.animations as THREE.AnimationClip[]) ?? [];
+        }
+        break; // first one that loads wins
+      } catch (e) {
+        // 404 or parse error — try the next candidate. Expected for
+        // the format the operator didn't drop in.
+        // eslint-disable-next-line no-console
+        console.debug(`[runner] no model at ${c.url}`, e);
+      }
     }
+
+    if (!scene) return; // both candidates failed; keep placeholder
 
     // If a newer call to buildPlayerVisual ran while we awaited
     // (e.g. init() arrived twice with different genders), bail.
     // The placeholder for that newer call has already been built;
-    // its own tryLoadGltfPlayer will handle its GLB swap.
+    // its own tryLoadGltfPlayer will handle its model swap.
     if (gender === 'female' && this.playerGender !== 'female') return;
     if (gender !== 'female' && this.playerGender === 'female') return;
 
-    // Tear down the placeholder + any previously-loaded GLB.
+    // Tear down the placeholder + any previously-loaded model.
     this.disposePlayerVisualResources();
 
-    const model = gltf.scene;
+    const model = scene;
 
     // Skinned meshes inside the GLB sometimes get frustum-culled
     // even when they're on-screen because their bounding sphere
@@ -827,9 +847,9 @@ export class RunnerGame {
     this.isPlaceholderPlayer = false;
 
     // Set up the animation mixer + play the run clip.
-    if (gltf.animations.length > 0) {
+    if (animations.length > 0) {
       this.playerMixer = new THREE.AnimationMixer(model);
-      const runClip = this.pickRunClip(gltf.animations);
+      const runClip = this.pickRunClip(animations);
       this.playerRunAction = this.playerMixer.clipAction(runClip);
       this.playerRunAction.setLoop(THREE.LoopRepeat, Infinity);
       this.playerRunAction.play();
