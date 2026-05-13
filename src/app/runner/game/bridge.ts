@@ -20,8 +20,6 @@ export type InitPayload = {
   /** Firestore users/{uid}. Echoed back on gameOver for audit. */
   userId?: string;
   playerGender?: PlayerGender;
-  /** Caps tipsy effects when true (accessibility). */
-  reduceMotion?: boolean;
   /** Live admin tunables from games/runner. */
   settings?: {
     startSpeed?: number;

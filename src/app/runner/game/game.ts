@@ -155,7 +155,6 @@ export class RunnerGame {
   // Init values pushed from Flutter (may be undefined if loaded
   // in a regular browser tab).
   private playerGender: PlayerGender = '';
-  private reduceMotion = false;
   private userId: string | undefined;
 
   // ── Construction ────────────────────────────────────────────────
@@ -561,10 +560,11 @@ export class RunnerGame {
     const buzzFx = this.buzz.getInterpolatedEffectParams();
 
     // ── Apply buzz visual effects to camera + canvas ──────────
+    // The drunk effect is part of the core design — there's no
+    // "reduce motion" opt-out anymore. Everyone gets the same game.
     // Camera sway: oscillate Z-roll at ~0.8 Hz scaled by amplitude.
     const swayPhase = this.duration * 0.8 * Math.PI * 2;
-    const swayDeg = this.reduceMotion ? 0 : buzzFx.sway;
-    this.camera.rotation.z = (Math.sin(swayPhase) * swayDeg * Math.PI) / 180;
+    this.camera.rotation.z = (Math.sin(swayPhase) * buzzFx.sway * Math.PI) / 180;
     // FOV tunnel — slight FOV increase at high buzz reads as
     // "the world closing in." Update projection matrix on change.
     const targetFov = this.baseFov + buzzFx.fovOffset;
@@ -574,8 +574,7 @@ export class RunnerGame {
     }
     // Buzz blur — via HUD's backdrop-filter overlay (works on iOS
     // WKWebView; `filter: blur()` on the WebGL canvas does NOT).
-    const blurPx = this.reduceMotion ? 0 : buzzFx.blur;
-    this.hud.setBlur(blurPx);
+    this.hud.setBlur(buzzFx.blur);
 
     // ── Lane interpolation (eased) ────────────────────────────
     if (this.laneChangeTime < this.laneChangeDuration) {
@@ -970,7 +969,6 @@ export class RunnerGame {
   init(payload: InitPayload) {
     this.userId = payload.userId;
     this.playerGender = payload.playerGender ?? '';
-    this.reduceMotion = payload.reduceMotion === true;
     if (payload.settings) {
       const s = payload.settings;
       if (typeof s.startSpeed === 'number') {
