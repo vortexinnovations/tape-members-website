@@ -1241,6 +1241,24 @@ export class RunnerGame {
         console.warn(`[runner/jump] retargetClip failed for ${mesh.name}`, e);
         continue;
       }
+      // CRITICAL — retargetClip mutates the target mesh's bones
+      // (position, quaternion, AND scale) every frame of its loop
+      // as a side effect of computing the retarget transforms. It
+      // never restores them. After this call the bones sit at the
+      // final clip frame's pose with potentially-scaled bones —
+      // and the retargeted clip's tracks ONLY contain quaternions
+      // (no scale tracks), so the action never resets scale when
+      // it plays. Result without this fix: character renders at
+      // wildly wrong size because bone scales never recover.
+      //
+      // `skeleton.pose()` reads the skeleton's `boneInverses` and
+      // resets every bone back to its bind-pose position +
+      // quaternion + scale. The currently-playing run animation
+      // will immediately overwrite position+quaternion on the
+      // next mixer.update tick; scale stays at the bind values
+      // (1,1,1 for Mixamo).
+      mesh.skeleton.pose();
+
       if (retargeted.tracks.length === 0) {
         // eslint-disable-next-line no-console
         console.debug(
@@ -1255,6 +1273,11 @@ export class RunnerGame {
       action.enabled = false;
       this.playerJumpActions.push(action);
     }
+    // Re-propagate matrixWorld on the player visual in case
+    // retargetClip's internal `target.matrixWorld.identity()` call
+    // (line 89 of SkeletonUtils.js, via `retarget()`) left anything
+    // in an inconsistent state.
+    this.playerVisual.updateMatrixWorld(true);
     // eslint-disable-next-line no-console
     console.log(
       `[runner/jump] setup complete: ${this.playerJumpActions.length}/${skinnedMeshes.length} actions wired`,
