@@ -1131,10 +1131,15 @@ export class RunnerGame {
       // and — for methuselah only — the gold halo torus.
 
       // Material overrides — dark glass body, dark foil, dark cage.
+      // Tiny green emissive tint on the glass so the bottle's
+      // silhouette reads against the dark fog even when the club
+      // lights aren't directly hitting it.
       const glassMat = new THREE.MeshStandardMaterial({
         color: 0x0c1a14,
         roughness: 0.20,
         metalness: 0.45,
+        emissive: 0x143028,
+        emissiveIntensity: 0.18,
       });
       const foilMat = new THREE.MeshStandardMaterial({
         color: 0x141414,
@@ -1174,9 +1179,17 @@ export class RunnerGame {
       const labelMat = new THREE.SpriteMaterial({
         map: labelTexture,
         transparent: true,
-        depthWrite: false, // avoid z-fighting with the bottle body
+        // Sprite sits at the bottle's Y rotation axis (X=Z=0), which
+        // puts it geometrically INSIDE the opaque body cylinder. With
+        // normal depth testing it'd be hidden by the body wall every
+        // frame. Disable depth test + bump renderOrder so it always
+        // composites on top of the bottle, treating it as an emissive
+        // badge that "glows through" the glass.
+        depthTest: false,
+        depthWrite: false,
       });
       const label = new THREE.Sprite(labelMat);
+      label.renderOrder = 999;
       // Sprite scale = world-space dimensions of the rendered quad.
       // Width ≈ 1.4 × body radius keeps the badge inside the bottle's
       // silhouette from the front. Height is wider × the canvas
