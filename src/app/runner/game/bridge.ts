@@ -20,13 +20,45 @@ export type InitPayload = {
   /** Firestore users/{uid}. Echoed back on gameOver for audit. */
   userId?: string;
   playerGender?: PlayerGender;
-  /** Live admin tunables from games/runner. */
+  /**
+   * Live admin tunables from games/runner. Every field is optional;
+   * the game falls back to its built-in default if a field is
+   * missing or non-numeric. Lets the operator A/B the gameplay
+   * without a redeploy.
+   */
   settings?: {
+    // ── Speed curve ─────────────────────────────────────────────
     startSpeed?: number;
     maxSpeed?: number;
     speedRamp?: number;
+    // ── Buzz mechanic ───────────────────────────────────────────
     maxTipsyLevel?: number;
     tipsyDecaySeconds?: number;
+    // ── Spawn pacing (Three.js only) ────────────────────────────
+    pickupIntervalSeconds?: number;
+    obstacleIntervalSeconds?: number;
+    // ── Combo (Three.js only) ───────────────────────────────────
+    comboWindowSeconds?: number;
+    // ── Player feel (Three.js only) ─────────────────────────────
+    jumpVelocity?: number;
+    laneChangeSeconds?: number;
+    // ── Pickup spawn weights (Three.js only). 0 = never spawn ──
+    waterWeight?: number;
+    vodkaMiniWeight?: number;
+    vodkaBottleWeight?: number;
+    champagneWeight?: number;
+    magnumWeight?: number;
+    methuselahWeight?: number;
+    // ── Pickup point values (Three.js only). Pre-combo base score
+    vodkaMiniScore?: number;
+    vodkaBottleScore?: number;
+    champagneScore?: number;
+    magnumScore?: number;
+    methuselahScore?: number;
+    // ── Obstacle spawn weights (Three.js only) ──────────────────
+    speakerWeight?: number;
+    bouncerWeight?: number;
+    discoBallWeight?: number;
   };
 };
 

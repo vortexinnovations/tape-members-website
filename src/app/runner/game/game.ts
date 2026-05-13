@@ -36,11 +36,11 @@ import {
   OBSTACLES,
   PICKUPS,
   PLAYER,
-  rollObstacle,
-  rollPickup,
   SPAWN,
   WORLD,
+  type ObstacleKind,
   type ObstacleSpec,
+  type PickupKind,
   type PickupSpec,
 } from './tuning';
 
@@ -155,6 +155,23 @@ export class RunnerGame {
   private speedRamp = WORLD.SPEED_RAMP;
   private distance = 0;
   private duration = 0;
+
+  // ── Admin-tunable knobs (all overridable via init.settings) ──
+  // Spawn pacing — interval in seconds at base speed; scaled
+  // inversely by current speed in the spawner.
+  private pickupIntervalSeconds = SPAWN.PICKUP_INTERVAL_BASE_S;
+  private obstacleIntervalSeconds = SPAWN.OBSTACLE_INTERVAL_BASE_S;
+  // Combo window — seconds since the last pickup to keep the chain.
+  private comboWindowSeconds: number = COMBO.WINDOW_S;
+  // Player feel — jump impulse + base lane-change time (buzz still
+  // scales the lane time at higher levels).
+  private jumpVelocity = PLAYER.JUMP_VY;
+  private laneChangeBaseSeconds = PLAYER.LANE_CHANGE_BASE_S;
+  // Per-spec override maps. Keys present = override applied; keys
+  // absent = fall back to PICKUPS[kind].weight / .score / etc.
+  private pickupWeightOverrides: Partial<Record<PickupKind, number>> = {};
+  private pickupScoreOverrides: Partial<Record<PickupKind, number>> = {};
+  private obstacleWeightOverrides: Partial<Record<ObstacleKind, number>> = {};
 
   private running = true;
   private gameOver = false;
@@ -730,13 +747,13 @@ export class RunnerGame {
     // don't suddenly speed-warp the player. Duration is the buzz-
     // scaled base value (slower at high buzz).
     const slow = this.buzz.getInterpolatedEffectParams().laneSlowFactor;
-    this.laneChangeDuration = PLAYER.LANE_CHANGE_BASE_S * slow;
+    this.laneChangeDuration = this.laneChangeBaseSeconds * slow;
   }
   private jump() {
     if (this.gameOver || !this.running) return;
     this.startGameIfNotStarted();
     if (this.playerY > PLAYER.BASE_Y + 0.05) return; // already airborne
-    this.playerVy = PLAYER.JUMP_VY;
+    this.playerVy = this.jumpVelocity;
   }
 
   /**
@@ -931,7 +948,7 @@ export class RunnerGame {
     // ── Combo expiry ──────────────────────────────────────────
     if (this.combo > 0) {
       this.comboTimer += dt;
-      if (this.comboTimer >= COMBO.WINDOW_S) {
+      if (this.comboTimer >= this.comboWindowSeconds) {
         this.breakCombo();
       }
     }
@@ -940,9 +957,9 @@ export class RunnerGame {
     this.spawnAccumPickup += dt;
     this.spawnAccumObstacle += dt;
     const pickupInterval =
-      SPAWN.PICKUP_INTERVAL_BASE_S * (this.startSpeed / this.speed);
+      this.pickupIntervalSeconds * (this.startSpeed / this.speed);
     const obstacleInterval =
-      SPAWN.OBSTACLE_INTERVAL_BASE_S * (this.startSpeed / this.speed);
+      this.obstacleIntervalSeconds * (this.startSpeed / this.speed);
     if (this.spawnAccumPickup >= pickupInterval) {
       this.spawnAccumPickup = 0;
       this.spawnPickup();
@@ -1100,8 +1117,58 @@ export class RunnerGame {
     return t;
   }
 
+  /**
+   * Weighted-pick a pickup spec, honouring admin overrides in
+   * `pickupWeightOverrides`. Weights of 0 (or missing keys after
+   * override) disable that pickup entirely. If every weight ends
+   * up at 0, falls back to water as the safe default.
+   */
+  private rollAdjustedPickup(): PickupSpec {
+    const entries: { spec: PickupSpec; weight: number }[] = [];
+    let total = 0;
+    for (const spec of Object.values(PICKUPS)) {
+      const w = this.pickupWeightOverrides[spec.kind] ?? spec.weight;
+      if (w > 0) {
+        entries.push({ spec, weight: w });
+        total += w;
+      }
+    }
+    if (total <= 0) return PICKUPS.water;
+    let r = Math.random() * total;
+    for (const e of entries) {
+      r -= e.weight;
+      if (r <= 0) return e.spec;
+    }
+    return entries[entries.length - 1].spec;
+  }
+
+  /** Same weighted-pick logic for obstacles. */
+  private rollAdjustedObstacle(): ObstacleSpec {
+    const entries: { spec: ObstacleSpec; weight: number }[] = [];
+    let total = 0;
+    for (const spec of Object.values(OBSTACLES)) {
+      const w = this.obstacleWeightOverrides[spec.kind] ?? spec.weight;
+      if (w > 0) {
+        entries.push({ spec, weight: w });
+        total += w;
+      }
+    }
+    if (total <= 0) return OBSTACLES.speaker;
+    let r = Math.random() * total;
+    for (const e of entries) {
+      r -= e.weight;
+      if (r <= 0) return e.spec;
+    }
+    return entries[entries.length - 1].spec;
+  }
+
+  /** Pickup point value with admin override applied if set. */
+  private getPickupScore(spec: PickupSpec): number {
+    return this.pickupScoreOverrides[spec.kind] ?? spec.score;
+  }
+
   private spawnPickup() {
-    const spec = rollPickup();
+    const spec = this.rollAdjustedPickup();
     // Build the pickup as a Group, parented under an invisible
     // cylinder collider so collision / scrolling / pickup-flash
     // logic still treats it as a single object.
@@ -1454,7 +1521,7 @@ export class RunnerGame {
   }
 
   private spawnObstacle() {
-    const spec = rollObstacle();
+    const spec = this.rollAdjustedObstacle();
     const mesh = this.buildObstacleMesh(spec);
     const lane = Math.floor(Math.random() * LANES.X.length);
     mesh.position.set(LANES.X[lane], spec.baseY, WORLD.SPAWN_Z);
@@ -1802,7 +1869,8 @@ export class RunnerGame {
       this.peakCombo = Math.max(this.peakCombo, this.combo);
       this.comboTimer = 0;
       const mult = comboMultiplier(this.combo);
-      const earned = Math.round(spec.score * mult);
+      // Use admin-tunable score (override map ?? spec default).
+      const earned = Math.round(this.getPickupScore(spec) * mult);
       this.score += earned;
       this.bottlesCollected++;
       this.hud.flashPickup(spec, earned);
@@ -1927,6 +1995,75 @@ export class RunnerGame {
       if (typeof s.speedRamp === 'number') this.speedRamp = s.speedRamp;
       if (typeof s.tipsyDecaySeconds === 'number') {
         this.buzz.setDecaySeconds(s.tipsyDecaySeconds);
+      }
+
+      // ── Spawn pacing ────────────────────────────────────────
+      // Clamp to a sane floor (0.1s) so an admin who accidentally
+      // sets the interval to 0 doesn't kick off an infinite spawn.
+      if (typeof s.pickupIntervalSeconds === 'number' && s.pickupIntervalSeconds >= 0.1) {
+        this.pickupIntervalSeconds = s.pickupIntervalSeconds;
+      }
+      if (typeof s.obstacleIntervalSeconds === 'number' && s.obstacleIntervalSeconds >= 0.1) {
+        this.obstacleIntervalSeconds = s.obstacleIntervalSeconds;
+      }
+
+      // ── Combo + player feel ─────────────────────────────────
+      if (typeof s.comboWindowSeconds === 'number' && s.comboWindowSeconds > 0) {
+        this.comboWindowSeconds = s.comboWindowSeconds;
+      }
+      if (typeof s.jumpVelocity === 'number' && s.jumpVelocity > 0) {
+        this.jumpVelocity = s.jumpVelocity;
+      }
+      if (typeof s.laneChangeSeconds === 'number' && s.laneChangeSeconds >= 0.05) {
+        this.laneChangeBaseSeconds = s.laneChangeSeconds;
+      }
+
+      // ── Pickup weight overrides ─────────────────────────────
+      // Each is optional. A weight of 0 disables that pickup
+      // entirely; negative values are treated as 0 in the roller.
+      const pickupWeightKeys: Array<[PickupKind, keyof typeof s]> = [
+        ['water', 'waterWeight'],
+        ['vodkaMini', 'vodkaMiniWeight'],
+        ['vodkaBottle', 'vodkaBottleWeight'],
+        ['champagne', 'champagneWeight'],
+        ['magnum', 'magnumWeight'],
+        ['methuselah', 'methuselahWeight'],
+      ];
+      for (const [kind, key] of pickupWeightKeys) {
+        const v = s[key];
+        if (typeof v === 'number' && Number.isFinite(v)) {
+          this.pickupWeightOverrides[kind] = Math.max(0, v);
+        }
+      }
+
+      // ── Pickup score overrides ──────────────────────────────
+      // Water is excluded — it's always 0 (its value comes from
+      // the buzz reduction, not points).
+      const pickupScoreKeys: Array<[PickupKind, keyof typeof s]> = [
+        ['vodkaMini', 'vodkaMiniScore'],
+        ['vodkaBottle', 'vodkaBottleScore'],
+        ['champagne', 'champagneScore'],
+        ['magnum', 'magnumScore'],
+        ['methuselah', 'methuselahScore'],
+      ];
+      for (const [kind, key] of pickupScoreKeys) {
+        const v = s[key];
+        if (typeof v === 'number' && Number.isFinite(v)) {
+          this.pickupScoreOverrides[kind] = Math.max(0, v);
+        }
+      }
+
+      // ── Obstacle weight overrides ───────────────────────────
+      const obstacleWeightKeys: Array<[ObstacleKind, keyof typeof s]> = [
+        ['speaker', 'speakerWeight'],
+        ['bouncer', 'bouncerWeight'],
+        ['discoBall', 'discoBallWeight'],
+      ];
+      for (const [kind, key] of obstacleWeightKeys) {
+        const v = s[key];
+        if (typeof v === 'number' && Number.isFinite(v)) {
+          this.obstacleWeightOverrides[kind] = Math.max(0, v);
+        }
       }
     }
     postToFlutter({
