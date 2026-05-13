@@ -616,50 +616,84 @@ export class RunnerGame {
     /* eslint-disable no-console */
     const warmStart = performance.now();
     // Pre-warm GPU + animation state so the first jump doesn't
-    // hitch. Three layers of first-use work to flush here:
+    // hitch. Previous attempt rendered to a 1×1 off-screen target,
+    // but that's too small to force mipmap generation or full-
+    // resolution texture sampling — the GPU defers that work
+    // until the first canvas-resolution render, which is exactly
+    // what we're trying to avoid. Diagnostic showed frame 1 of
+    // the first jump took 886 ms with 1×1 pre-warm in place.
     //
-    //   1. Shader compile + link for each unique material.
-    //      Handled by `renderer.compile(scene, camera)`.
-    //   2. Texture upload to GPU memory — only happens during
-    //      an actual render call, NOT during compile().
-    //   3. AnimationMixer's first-tick PropertyBinding pass +
-    //      internal interpolant buffer allocation — only happens
-    //      on the first `mixer.update()` after `action.play()`.
-    //
-    // To cover all three in one shot we do a real one-frame
-    // render of the scene with the jump character visible, but
-    // redirect the output to a 1×1 off-screen render target so
-    // the user never sees the swap. The mixer is also pre-ticked
-    // once with the action playing so PropertyBindings resolve.
-    //
-    // Yes, this blocks the main thread for the duration of the
-    // render. But it happens once, during init (when the user is
-    // already in the input-hint "swipe to start" idle state), so
-    // it's invisible to gameplay.
+    // New strategy, in order:
+    //   1. `renderer.initTexture(t)` for every texture on every
+    //      material of the jump character. This is the EXPLICIT
+    //      API for forcing a texture upload — calls texImage2D
+    //      under the hood, no render-pass required.
+    //   2. `renderer.compile(scene, camera)` for shader compile.
+    //   3. Pre-tick the mixer so the AnimationMixer's first-
+    //      binding pass + interpolant buffer alloc happen now.
+    //   4. Render to a CANVAS-SIZED off-screen target so any
+    //      remaining resolution-dependent work (mipmap building,
+    //      framebuffer-specific state) is exercised at full size.
+
+    // 1. Force-upload every texture on the jump character.
+    const seenTextures = new Set<THREE.Texture>();
+    model.traverse((obj) => {
+      const meshObj = obj as THREE.Mesh;
+      if (!meshObj.material) return;
+      const mats = Array.isArray(meshObj.material)
+        ? meshObj.material
+        : [meshObj.material];
+      for (const mat of mats) {
+        // Walk every property; any Texture instance gets uploaded.
+        // Mixamo materials carry map / normalMap / specularMap /
+        // glossinessMap / emissiveMap depending on the export
+        // variant, plus a few others — too many to enumerate by
+        // name, so we just sniff for `.isTexture`.
+        for (const key of Object.keys(mat)) {
+          const value = (mat as unknown as Record<string, unknown>)[key];
+          if (
+            value &&
+            typeof value === 'object' &&
+            (value as THREE.Texture).isTexture &&
+            !seenTextures.has(value as THREE.Texture)
+          ) {
+            seenTextures.add(value as THREE.Texture);
+            this.renderer.initTexture(value as THREE.Texture);
+          }
+        }
+      }
+    });
+
+    // 2. Shader compile + link.
+    this.renderer.compile(this.scene, this.camera);
+
+    // 3. Pre-tick the mixer.
     model.visible = true;
-    // Pre-tick the mixer so AnimationMixer's first-binding work
-    // happens now instead of on the first real jump.
     this.playerJumpAction.play();
     this.playerJumpMixer.update(0);
-    // Render once to an off-screen target. This forces ALL GPU
-    // initialization for the jump character (shaders, texture
-    // uploads, attribute buffer binding, etc.).
+
+    // 4. Canvas-sized off-screen render. The render target size
+    // matches the canvas's actual pixel buffer so any resolution-
+    // dependent first-time GPU work happens here, not on the
+    // first real frame.
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    const warmW = Math.max(1, Math.floor(size.x));
+    const warmH = Math.max(1, Math.floor(size.y));
+    const warmTarget = new THREE.WebGLRenderTarget(warmW, warmH);
     const prevTarget = this.renderer.getRenderTarget();
-    const warmTarget = new THREE.WebGLRenderTarget(1, 1);
     this.renderer.setRenderTarget(warmTarget);
     this.renderer.render(this.scene, this.camera);
     this.renderer.setRenderTarget(prevTarget);
     warmTarget.dispose();
+
     // Reset the action so the first real jump starts at frame 0.
     this.playerJumpAction.stop();
     this.playerJumpAction.reset();
-    // Belt-and-braces: also run renderer.compile() in case the
-    // above missed any deferred shader work.
-    this.renderer.compile(this.scene, this.camera);
     // Hide again until the player jumps.
     model.visible = false;
     console.log(
-      `[runner/jump-warm] install complete in ${(performance.now() - warmStart).toFixed(1)}ms`,
+      `[runner/jump-warm] install complete in ${(performance.now() - warmStart).toFixed(1)}ms ` +
+        `(uploaded ${seenTextures.size} textures, target=${warmW}×${warmH})`,
     );
     /* eslint-enable no-console */
   }
