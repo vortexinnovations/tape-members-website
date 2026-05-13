@@ -20,6 +20,10 @@
 //   scrolls +Z past them.
 
 import * as THREE from 'three';
+import {
+  GLTFLoader,
+  type GLTF,
+} from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 import {
   postToFlutter,
@@ -95,6 +99,18 @@ export class RunnerGame {
     legL: THREE.Mesh;
     legR: THREE.Mesh;
   };
+  /**
+   * When a rigged GLB character is loaded (see `tryLoadGltfPlayer`),
+   * `playerMixer` drives the bone animation each frame and the
+   * manual `playerLimbs` swing is skipped. When the GLB is missing
+   * or fails to load, `playerMixer` stays undefined and we fall
+   * back to the capsule-stack placeholder's manual limb swing.
+   */
+  private playerMixer?: THREE.AnimationMixer;
+  private playerRunAction?: THREE.AnimationAction;
+  /** True while we're showing the capsule fallback. Flips false
+   *  once a GLB load completes successfully. */
+  private isPlaceholderPlayer = true;
   private playerLane = 1;
   // Explicit `number` annotations — without them TS infers the
   // literal type `0` from LANE_X[1] (because LANES.X is `as const`)
@@ -397,8 +413,32 @@ export class RunnerGame {
   }
 
   /**
-   * Build (or rebuild) the visible character meshes parented under
-   * `this.player`. Owns `this.playerVisual` and `this.playerLimbs`.
+   * Build (or rebuild) the visible character. Two-phase:
+   *
+   * 1) Synchronous capsule-stack placeholder — guarantees the
+   *    player renders instantly, no loading state on screen.
+   * 2) Background GLB upgrade — `tryLoadGltfPlayer` fetches
+   *    `/models/runner_<gender>.glb` and, if present + valid,
+   *    disposes the placeholder and replaces it with a fully
+   *    rigged Mixamo character whose run animation plays on an
+   *    AnimationMixer.
+   *
+   * If the GLB is missing (404) or fails to load, the placeholder
+   * stays — the manual `playerLimbs` swing in update() handles
+   * the run cycle for it.
+   */
+  private buildPlayerVisual(gender: string) {
+    this.buildPlayerVisualPlaceholder(gender);
+    // Fire-and-forget. If the GLB exists, it'll swap in shortly;
+    // if not, the placeholder stays and the player is none the wiser.
+    this.tryLoadGltfPlayer(gender);
+  }
+
+  /**
+   * Synchronous capsule-stack character. The fallback when no GLB
+   * is available, and the placeholder shown during the brief GLB
+   * load window. Owns `playerVisual` + `playerLimbs`.
+   *
    * Branches on gender for the silhouette:
    *   - 'female' → little black dress, bare arms, long hair,
    *     gold necklace, heels.
@@ -409,19 +449,11 @@ export class RunnerGame {
    * subsequent calls (e.g. init() arriving with a gender) don't
    * leak GPU memory.
    */
-  private buildPlayerVisual(gender: string) {
+  private buildPlayerVisualPlaceholder(gender: string) {
     // ── Dispose any existing visual ───────────────────────────
-    if (this.playerVisual) {
-      this.playerVisual.removeFromParent();
-      this.playerVisual.traverse((obj) => {
-        if (obj instanceof THREE.Mesh) {
-          obj.geometry.dispose();
-          const m = obj.material;
-          if (Array.isArray(m)) m.forEach((mat) => mat.dispose());
-          else m.dispose();
-        }
-      });
-    }
+    this.disposePlayerVisualResources();
+
+    this.isPlaceholderPlayer = true;
 
     const isFemale = gender === 'female';
     const visual = new THREE.Group();
@@ -661,6 +693,165 @@ export class RunnerGame {
     this.playerLimbs = { armL, armR, legL, legR };
   }
 
+  /**
+   * Tear down any current player visual (placeholder Group OR
+   * loaded GLB scene) + the AnimationMixer that drove it. Called
+   * before rebuilding for a gender swap or before bringing a
+   * freshly-loaded GLB online.
+   */
+  private disposePlayerVisualResources() {
+    if (this.playerMixer) {
+      this.playerMixer.stopAllAction();
+      this.playerMixer.uncacheRoot(this.playerMixer.getRoot());
+      this.playerMixer = undefined;
+      this.playerRunAction = undefined;
+    }
+    if (this.playerVisual) {
+      this.playerVisual.removeFromParent();
+      this.playerVisual.traverse((obj) => {
+        if (obj instanceof THREE.Mesh || obj instanceof THREE.SkinnedMesh) {
+          obj.geometry.dispose();
+          const m = obj.material;
+          if (Array.isArray(m)) m.forEach((mat) => this.disposeMaterial(mat));
+          else this.disposeMaterial(m);
+        }
+      });
+    }
+  }
+
+  /**
+   * Material disposer that also frees the textures on it. Plain
+   * Mesh.dispose() doesn't dispose textures, so a SkinnedMesh
+   * from a GLB would otherwise leak `map`, `normalMap`, etc on
+   * every gender swap.
+   */
+  private disposeMaterial(mat: THREE.Material) {
+    const m = mat as THREE.Material & {
+      map?: THREE.Texture;
+      normalMap?: THREE.Texture;
+      roughnessMap?: THREE.Texture;
+      metalnessMap?: THREE.Texture;
+      emissiveMap?: THREE.Texture;
+    };
+    m.map?.dispose();
+    m.normalMap?.dispose();
+    m.roughnessMap?.dispose();
+    m.metalnessMap?.dispose();
+    m.emissiveMap?.dispose();
+    mat.dispose();
+  }
+
+  /**
+   * Try to load a rigged Mixamo (or any glTF-binary) character
+   * from `/models/runner_<gender>.glb`. On success, dispose the
+   * placeholder visual and replace it with the GLB scene + an
+   * AnimationMixer that plays its run animation in a loop.
+   *
+   * On failure (404, network error, malformed file), silently
+   * stay on the placeholder. The user gets the capsule character
+   * while we wait for them to drop their Mixamo file in.
+   *
+   * File requirements:
+   *   - glTF Binary (.glb)
+   *   - With Skin (export option in Mixamo)
+   *   - One or more animations included; we prefer any clip
+   *     whose name contains "run" / "running"; otherwise we
+   *     fall back to the first clip.
+   *   - Origin at the character's feet (Mixamo default).
+   */
+  private async tryLoadGltfPlayer(gender: string) {
+    const url =
+      gender === 'female' ? '/models/runner_female.glb' : '/models/runner_male.glb';
+    const loader = new GLTFLoader();
+    let gltf: GLTF;
+    try {
+      gltf = await loader.loadAsync(url);
+    } catch (e) {
+      // 404, network, or parse error — placeholder stays. This is
+      // the expected state until the operator drops their Mixamo
+      // files into public/models/.
+      // Debug-log for development; not user-visible.
+      // eslint-disable-next-line no-console
+      console.debug(`[runner] no GLB at ${url} — keeping placeholder`, e);
+      return;
+    }
+
+    // If a newer call to buildPlayerVisual ran while we awaited
+    // (e.g. init() arrived twice with different genders), bail.
+    // The placeholder for that newer call has already been built;
+    // its own tryLoadGltfPlayer will handle its GLB swap.
+    if (gender === 'female' && this.playerGender !== 'female') return;
+    if (gender !== 'female' && this.playerGender === 'female') return;
+
+    // Tear down the placeholder + any previously-loaded GLB.
+    this.disposePlayerVisualResources();
+
+    const model = gltf.scene;
+
+    // Skinned meshes inside the GLB sometimes get frustum-culled
+    // even when they're on-screen because their bounding sphere
+    // tracks the bind pose, not the deformed pose. Disable it
+    // defensively so the player doesn't pop out of view at lane
+    // edges.
+    model.traverse((obj) => {
+      if (obj instanceof THREE.SkinnedMesh) {
+        obj.frustumCulled = false;
+      }
+    });
+
+    // Scale to fit the collider height. Mixamo exports are
+    // ~1 unit = 1 metre, so a 1.75m character is 1.75 tall and we
+    // gently scale up to PLAYER.HEIGHT = 1.8.
+    const bbox = new THREE.Box3().setFromObject(model);
+    const rawHeight = Math.max(0.01, bbox.max.y - bbox.min.y);
+    const scale = PLAYER.HEIGHT / rawHeight;
+    model.scale.setScalar(scale);
+
+    // After scaling, the model's local origin is at Mixamo's
+    // feet pivot. Re-compute the bbox and shift the model down
+    // so the feet sit at the collider's bottom (-PLAYER.HEIGHT/2
+    // in local coords).
+    const scaledBbox = new THREE.Box3().setFromObject(model);
+    const feetY = scaledBbox.min.y;
+    model.position.y = -PLAYER.HEIGHT / 2 - feetY;
+
+    // Mixamo characters face +Z by default (toward camera in the
+    // Mixamo preview). In our scene the camera looks toward -Z,
+    // so a default-rotated character would be looking at the
+    // player. We want them running INTO the screen, so face -Z.
+    model.rotation.y = Math.PI;
+
+    // Parent into the collider.
+    this.player.add(model);
+    this.playerVisual = model;
+    this.isPlaceholderPlayer = false;
+
+    // Set up the animation mixer + play the run clip.
+    if (gltf.animations.length > 0) {
+      this.playerMixer = new THREE.AnimationMixer(model);
+      const runClip = this.pickRunClip(gltf.animations);
+      this.playerRunAction = this.playerMixer.clipAction(runClip);
+      this.playerRunAction.setLoop(THREE.LoopRepeat, Infinity);
+      this.playerRunAction.play();
+    }
+  }
+
+  /**
+   * Pick a run-cycle clip from a GLB's animation list. Mixamo
+   * names them "Running" / "Run"; we also accept "Walk" as a
+   * fallback for characters that ship without a run animation.
+   * If nothing matches, returns the first clip — better to play
+   * something than show a T-pose.
+   */
+  private pickRunClip(animations: THREE.AnimationClip[]): THREE.AnimationClip {
+    const keywords = ['run', 'running', 'jog', 'walk'];
+    for (const k of keywords) {
+      const match = animations.find((c) => c.name.toLowerCase().includes(k));
+      if (match) return match;
+    }
+    return animations[0];
+  }
+
   // ── Input ───────────────────────────────────────────────────────
 
   private swipeStart: { x: number; y: number } | null = null;
@@ -796,7 +987,7 @@ export class RunnerGame {
     if (!this.gameStarted) {
       this.previewClock += dt;
       this.tickClubLights(this.previewClock);
-      this.runPlayerIdleAnimation(this.previewClock);
+      this.runPlayerIdleAnimation(this.previewClock, dt);
       return;
     }
 
@@ -863,28 +1054,35 @@ export class RunnerGame {
       const bobPhase = this.duration * (this.speed / this.startSpeed) * 8;
       this.player.position.y =
         PLAYER.BASE_Y + Math.sin(bobPhase) * 0.07;
-      // Run-cycle limb swing. Arms and legs swing opposite to each
-      // other in pairs (left-arm + right-leg forward together, then
-      // swap). Phase is tied to player speed so the cadence speeds
-      // up as the world accelerates.
-      const stridePhase =
-        this.duration * (this.speed / this.startSpeed) * 5.5;
-      const armSwing = Math.sin(stridePhase) * 0.55;
-      const legSwing = Math.sin(stridePhase) * 0.45;
-      // Arms swing on the X axis (forward/back).
-      this.playerLimbs.armL.rotation.x = armSwing;
-      this.playerLimbs.armR.rotation.x = -armSwing;
-      // Legs swing opposite to arms.
-      this.playerLimbs.legL.rotation.x = -legSwing;
-      this.playerLimbs.legR.rotation.x = legSwing;
-    } else {
-      // In the air — tuck legs forward, arms back. Keeps a clean
-      // jump pose instead of mid-stride limbs frozen.
-      this.playerLimbs.legL.rotation.x = -0.6;
-      this.playerLimbs.legR.rotation.x = -0.6;
-      this.playerLimbs.armL.rotation.x = 0.5;
-      this.playerLimbs.armR.rotation.x = 0.5;
     }
+    if (this.isPlaceholderPlayer) {
+      // Manual limb-swing for the capsule fallback. When a Mixamo
+      // GLB is in use, `playerMixer.update(dt)` below drives the
+      // skeleton instead and this block is skipped.
+      if (grounded) {
+        const stridePhase =
+          this.duration * (this.speed / this.startSpeed) * 5.5;
+        const armSwing = Math.sin(stridePhase) * 0.55;
+        const legSwing = Math.sin(stridePhase) * 0.45;
+        this.playerLimbs.armL.rotation.x = armSwing;
+        this.playerLimbs.armR.rotation.x = -armSwing;
+        this.playerLimbs.legL.rotation.x = -legSwing;
+        this.playerLimbs.legR.rotation.x = legSwing;
+      } else {
+        // In the air — tuck legs forward, arms back. Keeps a clean
+        // jump pose instead of mid-stride limbs frozen.
+        this.playerLimbs.legL.rotation.x = -0.6;
+        this.playerLimbs.legR.rotation.x = -0.6;
+        this.playerLimbs.armL.rotation.x = 0.5;
+        this.playerLimbs.armR.rotation.x = 0.5;
+      }
+    }
+    // Advance the Mixamo bone animation if we're on a rigged
+    // GLB. Run animation is permanently looping; the jump arc
+    // moves the whole collider so the running pose flying up
+    // through the air reads OK for a placeholder integration.
+    // (Replacing with a dedicated jump clip is a polish task.)
+    this.playerMixer?.update(dt);
 
     // ── Scroll floor stripes ──────────────────────────────────
     for (const s of this.floorStripes) {
@@ -1010,18 +1208,25 @@ export class RunnerGame {
    * moving yet). Keeps the runway feeling alive so the
    * "SWIPE TO START" overlay doesn't sit over a frozen tableau.
    */
-  private runPlayerIdleAnimation(t: number) {
-    const stridePhase = t * 5.5;
-    const armSwing = Math.sin(stridePhase) * 0.45;
-    const legSwing = Math.sin(stridePhase) * 0.40;
-    this.playerLimbs.armL.rotation.x = armSwing;
-    this.playerLimbs.armR.rotation.x = -armSwing;
-    this.playerLimbs.legL.rotation.x = -legSwing;
-    this.playerLimbs.legR.rotation.x = legSwing;
+  private runPlayerIdleAnimation(t: number, dt: number) {
     // Subtle bob — same range as the in-game run.
     const bobPhase = t * 8;
     this.player.position.y =
       PLAYER.BASE_Y + Math.sin(bobPhase) * 0.07;
+    if (this.isPlaceholderPlayer) {
+      const stridePhase = t * 5.5;
+      const armSwing = Math.sin(stridePhase) * 0.45;
+      const legSwing = Math.sin(stridePhase) * 0.40;
+      this.playerLimbs.armL.rotation.x = armSwing;
+      this.playerLimbs.armR.rotation.x = -armSwing;
+      this.playerLimbs.legL.rotation.x = -legSwing;
+      this.playerLimbs.legR.rotation.x = legSwing;
+    } else {
+      // Mixamo character — the run animation plays continuously
+      // from the moment the GLB loads, so they're already
+      // running in place. We just tick the mixer here too.
+      this.playerMixer?.update(dt);
+    }
   }
 
   // ── Spawning ────────────────────────────────────────────────────
@@ -2116,6 +2321,10 @@ export class RunnerGame {
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     this.resizeObserver?.disconnect();
     this.hud.dispose();
+    // Tear down the player visual + AnimationMixer + any loaded
+    // GLB textures BEFORE the scene-wide traverse so the mixer's
+    // bone references are released cleanly.
+    this.disposePlayerVisualResources();
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh || obj instanceof THREE.Sprite) {
         // Sprites don't have geometry but do have material.
@@ -2123,6 +2332,13 @@ export class RunnerGame {
         const m = obj.material;
         if (Array.isArray(m)) m.forEach((mat) => mat.dispose());
         else m.dispose();
+      } else if (obj instanceof THREE.SkinnedMesh) {
+        // Any stray SkinnedMesh that wasn't caught by the player
+        // disposer (shouldn't be any, but defensive).
+        obj.geometry.dispose();
+        const m = obj.material;
+        if (Array.isArray(m)) m.forEach((mat) => this.disposeMaterial(mat));
+        else this.disposeMaterial(m);
       }
     });
     // The cached champagne-label canvas texture is shared across all
