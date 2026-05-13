@@ -541,7 +541,7 @@ export class RunnerGame {
         console.debug('[runner] jump fbx has no animations');
         return;
       }
-      this.installJumpCharacter(fbx, clip);
+      await this.installJumpCharacter(fbx, clip);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.debug('[runner] jump character load failed', e);
@@ -555,7 +555,7 @@ export class RunnerGame {
    * into the collider hidden, and prepare its AnimationMixer with
    * a LoopOnce + clampWhenFinished action.
    */
-  private installJumpCharacter(
+  private async installJumpCharacter(
     model: THREE.Group,
     clip: THREE.AnimationClip,
   ) {
@@ -664,18 +664,33 @@ export class RunnerGame {
       }
     });
 
-    // 2. Shader compile + link.
-    this.renderer.compile(this.scene, this.camera);
-
-    // 3. Pre-tick the mixer.
+    // 2. Shader compile + link — but `compile()` only QUEUES
+    //    the compilation; on Chrome the GPU process compiles
+    //    shaders asynchronously and the first canvas render
+    //    BLOCKS until they're ready. The previous canvas-sized
+    //    off-screen render didn't help because rendering to a
+    //    different framebuffer doesn't fully prime the canvas
+    //    FBO's shader cache.
+    //
+    //    `compileAsync()` (Three.js r152+) uses the WebGL
+    //    extension `KHR_parallel_shader_compile` to actually
+    //    POLL the GPU process until all shaders are confirmed
+    //    ready. Awaiting it pushes the wait time to install
+    //    time instead of the first jump.
     model.visible = true;
     this.playerJumpAction.play();
     this.playerJumpMixer.update(0);
+    // compileAsync returns a Promise that resolves when every
+    // shader program for every visible object has been confirmed
+    // GPU-ready. This is the missing piece — previously we were
+    // only doing the sync `compile()` which doesn't wait.
+    const compileAsyncStart = performance.now();
+    await this.renderer.compileAsync(this.scene, this.camera);
+    const compileAsyncMs = performance.now() - compileAsyncStart;
 
-    // 4. Canvas-sized off-screen render. The render target size
-    // matches the canvas's actual pixel buffer so any resolution-
-    // dependent first-time GPU work happens here, not on the
-    // first real frame.
+    // 3. Canvas-sized off-screen render. With shaders confirmed
+    //    ready, this exercises any remaining resolution-dependent
+    //    GPU paths (mipmap binding, FBO state) at full size.
     const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     const warmW = Math.max(1, Math.floor(size.x));
     const warmH = Math.max(1, Math.floor(size.y));
@@ -693,7 +708,8 @@ export class RunnerGame {
     model.visible = false;
     console.log(
       `[runner/jump-warm] install complete in ${(performance.now() - warmStart).toFixed(1)}ms ` +
-        `(uploaded ${seenTextures.size} textures, target=${warmW}×${warmH})`,
+        `(uploaded ${seenTextures.size} textures, ` +
+        `compileAsync=${compileAsyncMs.toFixed(1)}ms, target=${warmW}×${warmH})`,
     );
     /* eslint-enable no-console */
   }
