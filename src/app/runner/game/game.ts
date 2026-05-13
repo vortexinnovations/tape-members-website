@@ -708,10 +708,15 @@ export class RunnerGame {
     for (let i = this.obstacles.length - 1; i >= 0; i--) {
       const o = this.obstacles[i];
       o.mesh.position.z += scroll;
-      // Disco balls spin so the mirror-ball look feels alive — the
-      // metallic material picks up the moving club lights nicely.
+      // Disco balls spin so the mirror-ball look feels alive — but
+      // we spin only the BALL child, not the whole obstacle mesh
+      // (the long hanging cable would visibly wobble if it rotated
+      // along with the ball).
       if (o.spec.kind === 'discoBall') {
-        o.mesh.rotation.y += dt * 1.4;
+        const spinTarget = o.mesh.userData.spinTarget as
+          | THREE.Object3D
+          | undefined;
+        if (spinTarget) spinTarget.rotation.y += dt * 1.4;
       }
       if (o.mesh.position.z > WORLD.DESPAWN_Z) {
         this.scene.remove(o.mesh);
@@ -808,14 +813,14 @@ export class RunnerGame {
 
   private spawnPickup() {
     const spec = rollPickup();
-    // Build the pickup as a Group of body + neck + cap, parented
-    // under one mesh so collision / scrolling / pickup-flash logic
-    // still treats it as a single object. The "mesh" we store in
-    // ActivePickup is the bounding-box outer geometry (invisible) —
-    // visuals are children. This keeps the collision math simple
-    // and lets us swap real GLB models in later without re-plumbing
-    // the lifecycle.
+    // Build the pickup as a Group, parented under an invisible
+    // cylinder collider so collision / scrolling / pickup-flash
+    // logic still treats it as a single object.
     const group = new THREE.Group();
+    const isChampagne =
+      spec.kind === 'champagne' ||
+      spec.kind === 'magnum' ||
+      spec.kind === 'methuselah';
 
     const bodyMat = new THREE.MeshStandardMaterial({
       color: spec.color,
@@ -824,60 +829,112 @@ export class RunnerGame {
       emissive: spec.color,
       emissiveIntensity: spec.kind === 'methuselah' ? 0.45 : 0.18,
     });
-    const neckMat = new THREE.MeshStandardMaterial({
-      color: 0x141014, // dark, near-black neck
-      roughness: 0.4,
-      metalness: 0.2,
-    });
-    const capMat = new THREE.MeshStandardMaterial({
-      // Cap colour reads as foil — gold-ish for champagne tier,
-      // silver-ish for vodka tier, blue cap for water (sports
-      // bottle convention).
-      color: spec.kind === 'water'
-        ? 0x2b6fb3
-        : spec.kind.startsWith('vodka')
-          ? 0xc4c4c8
-          : 0xd9a23a, // champagne / magnum / methuselah
-      roughness: 0.4,
-      metalness: 0.6,
-    });
 
-    // Body — tapered slightly toward the neck (top smaller than bottom).
-    const bodyHeight = spec.height * 0.72;
-    const bodyGeo = new THREE.CylinderGeometry(
-      spec.radius * 0.78,        // top radius — narrows toward neck
-      spec.radius,                // bottom radius
-      bodyHeight,
-      16,
-    );
-    const body = new THREE.Mesh(bodyGeo, bodyMat);
-    body.position.y = bodyHeight / 2;
-    group.add(body);
+    if (isChampagne) {
+      // Champagne silhouette: full-radius cylindrical body → sharp
+      // shoulder cone → narrow neck → gold foil wrap → cork mushroom.
+      // The shoulder is the defining feature (vodka / water bottles
+      // taper gradually; champagne has a hard transition).
+      const bodyH = spec.height * 0.52;
+      const shoulderH = spec.height * 0.14;
+      const neckH = spec.height * 0.28;
+      const foilH = neckH * 0.55;
+      const corkH = spec.height * 0.06;
+      const neckR = spec.radius * 0.32;
 
-    // Neck — narrower cylinder above the body.
-    const neckHeight = spec.height * 0.22;
-    const neckRadius = spec.radius * 0.30;
-    const neckGeo = new THREE.CylinderGeometry(
-      neckRadius * 0.85,
-      neckRadius,
-      neckHeight,
-      12,
-    );
-    const neck = new THREE.Mesh(neckGeo, neckMat);
-    neck.position.y = bodyHeight + neckHeight / 2;
-    group.add(neck);
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(spec.radius * 0.96, spec.radius, bodyH, 18),
+        bodyMat,
+      );
+      body.position.y = bodyH / 2;
+      group.add(body);
 
-    // Cap — squat cylinder on top.
-    const capHeight = spec.height * 0.06;
-    const capGeo = new THREE.CylinderGeometry(
-      neckRadius * 1.05,
-      neckRadius * 0.95,
-      capHeight,
-      12,
-    );
-    const cap = new THREE.Mesh(capGeo, capMat);
-    cap.position.y = bodyHeight + neckHeight + capHeight / 2;
-    group.add(cap);
+      // Shoulder — sharp taper from body radius down to neck radius.
+      const shoulder = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckR, spec.radius * 0.96, shoulderH, 18),
+        bodyMat,
+      );
+      shoulder.position.y = bodyH + shoulderH / 2;
+      group.add(shoulder);
+
+      // Neck — slim cylinder above the shoulder, same body colour
+      // so the bottle reads as one piece. Real champagne necks are
+      // the same dark glass; we keep the tinted body colour for
+      // gameplay readability.
+      const neck = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckR * 0.96, neckR, neckH, 12),
+        bodyMat,
+      );
+      neck.position.y = bodyH + shoulderH + neckH / 2;
+      group.add(neck);
+
+      // Foil — gold wrap covering the upper portion of the neck.
+      // Slightly wider than the neck so it visually overlaps and
+      // reads as a separate material.
+      const foilMat = new THREE.MeshStandardMaterial({
+        color: 0xd9a23a,
+        roughness: 0.25,
+        metalness: 0.75,
+      });
+      const foil = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckR * 1.12, neckR * 1.08, foilH, 12),
+        foilMat,
+      );
+      foil.position.y = bodyH + shoulderH + neckH - foilH / 2;
+      group.add(foil);
+
+      // Cork mushroom — slightly wider at the top, tan colour.
+      const corkMat = new THREE.MeshStandardMaterial({
+        color: 0xb89060,
+        roughness: 0.85,
+        metalness: 0.05,
+      });
+      const cork = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckR * 1.20, neckR * 0.98, corkH, 12),
+        corkMat,
+      );
+      cork.position.y = bodyH + shoulderH + neckH + corkH / 2;
+      group.add(cork);
+    } else {
+      // Generic bottle (water, vodka): gradual taper body + neck + cap.
+      const neckMat = new THREE.MeshStandardMaterial({
+        color: 0x141014,
+        roughness: 0.4,
+        metalness: 0.2,
+      });
+      const capMat = new THREE.MeshStandardMaterial({
+        // Blue cap for water (sports-bottle convention), silver for
+        // vodka — distinct enough to read from a distance.
+        color: spec.kind === 'water' ? 0x2b6fb3 : 0xc4c4c8,
+        roughness: 0.4,
+        metalness: 0.6,
+      });
+
+      const bodyHeight = spec.height * 0.72;
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(spec.radius * 0.78, spec.radius, bodyHeight, 16),
+        bodyMat,
+      );
+      body.position.y = bodyHeight / 2;
+      group.add(body);
+
+      const neckHeight = spec.height * 0.22;
+      const neckRadius = spec.radius * 0.30;
+      const neck = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckRadius * 0.85, neckRadius, neckHeight, 12),
+        neckMat,
+      );
+      neck.position.y = bodyHeight + neckHeight / 2;
+      group.add(neck);
+
+      const capHeight = spec.height * 0.06;
+      const cap = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckRadius * 1.05, neckRadius * 0.95, capHeight, 12),
+        capMat,
+      );
+      cap.position.y = bodyHeight + neckHeight + capHeight / 2;
+      group.add(cap);
+    }
 
     // Methuselah halo — emissive ring around the body. Sells the
     // "rare pickup" feel even from a distance, before the player
@@ -896,7 +953,7 @@ export class RunnerGame {
       });
       const ring = new THREE.Mesh(ringGeo, ringMat);
       ring.rotation.x = Math.PI / 2;
-      ring.position.y = bodyHeight * 0.5;
+      ring.position.y = spec.height * 0.4;
       group.add(ring);
     }
 
@@ -926,53 +983,161 @@ export class RunnerGame {
 
   private spawnObstacle() {
     const spec = rollObstacle();
-    let geo: THREE.BufferGeometry;
-    if (spec.kind === 'discoBall') {
-      // Sphere — diameter = spec.width. Higher poly count so the
-      // mirror-ball reflections from the club lights read crisply.
-      geo = new THREE.SphereGeometry(spec.width / 2, 20, 14);
-    } else {
-      geo = new THREE.BoxGeometry(spec.width, spec.height, spec.depth);
-    }
-    const mat = new THREE.MeshStandardMaterial({
-      color: spec.color,
-      roughness:
-        spec.kind === 'discoBall' ? 0.15 :
-        spec.kind === 'speaker' ? 0.4 : 0.5,
-      metalness:
-        spec.kind === 'discoBall' ? 0.9 :
-        spec.kind === 'speaker' ? 0.3 : 0.05,
-      // Disco ball gets faint emissive so it pops in the dark fog
-      // even when the club lights swing away.
-      emissive: spec.kind === 'discoBall' ? 0xffffff : 0x000000,
-      emissiveIntensity: spec.kind === 'discoBall' ? 0.12 : 0,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = this.buildObstacleMesh(spec);
     const lane = Math.floor(Math.random() * LANES.X.length);
     mesh.position.set(LANES.X[lane], spec.baseY, WORLD.SPAWN_Z);
-
-    // Disco ball: add a thin hanging cable above the ball so it
-    // reads visually as "suspended from the ceiling" rather than
-    // floating in mid-air. Parented to the mesh so it scrolls
-    // together. Also a slow rotation so the mirror-ball look feels
-    // alive.
-    if (spec.kind === 'discoBall') {
-      const cableLen = 2.4;
-      const cableGeo = new THREE.CylinderGeometry(0.025, 0.025, cableLen, 6);
-      const cableMat = new THREE.MeshBasicMaterial({ color: 0x666666 });
-      const cable = new THREE.Mesh(cableGeo, cableMat);
-      // Position cable above the ball (its centre relative to the
-      // ball centre is half the cable length + ball radius).
-      cable.position.y = spec.width / 2 + cableLen / 2;
-      mesh.add(cable);
-      // Tag for the per-frame rotation in update(). We just spin
-      // the parent mesh — the cable comes along, which means the
-      // cable's hang isn't perfectly static, but at this scale the
-      // wobble is invisible.
-      (mesh as THREE.Mesh & { _isDiscoBall?: boolean })._isDiscoBall = true;
-    }
     this.scene.add(mesh);
     this.obstacles.push({ mesh, spec });
+  }
+
+  /**
+   * Build the visible + collidable mesh for an obstacle. Each kind
+   * uses a single "collider" mesh that intersectsPlayer reads for
+   * AABB / sphere math; decorative children hang off it as visual
+   * additions that don't affect collision.
+   *
+   * - speaker: dark cabinet box + raised front panel + woofer cone
+   *   + tweeter cone, all facing +Z (player-camera-side).
+   * - bouncer: dark red box (placeholder — real bouncer geometry
+   *   when we move beyond placeholders).
+   * - discoBall: INVISIBLE collider sphere with two visible
+   *   children — the spinning mirror ball and a static long cable
+   *   going up off-screen. Spin only touches the ball child so the
+   *   cable stays vertical.
+   */
+  private buildObstacleMesh(spec: ObstacleSpec): THREE.Mesh {
+    if (spec.kind === 'discoBall') {
+      // Invisible collider sphere — geometry only used for
+      // intersectsPlayer's radius read.
+      const colliderGeo = new THREE.SphereGeometry(spec.width / 2, 8, 6);
+      const colliderMat = new THREE.MeshBasicMaterial({ visible: false });
+      const mesh = new THREE.Mesh(colliderGeo, colliderMat);
+
+      // Visible mirror ball — this is the only thing that spins.
+      const ballGeo = new THREE.SphereGeometry(spec.width / 2, 20, 14);
+      const ballMat = new THREE.MeshStandardMaterial({
+        color: spec.color,
+        roughness: 0.15,
+        metalness: 0.9,
+        emissive: 0xffffff,
+        emissiveIntensity: 0.12,
+      });
+      const ball = new THREE.Mesh(ballGeo, ballMat);
+      mesh.add(ball);
+
+      // Long cable — extends well above the camera's frustum so it
+      // reads as "hanging from the ceiling." Static (not spinning).
+      // 12 units is more than enough to fly off the top of any
+      // viewport at this camera height + FOV.
+      const cableLen = 12;
+      const cableGeo = new THREE.CylinderGeometry(0.025, 0.025, cableLen, 6);
+      const cableMat = new THREE.MeshBasicMaterial({ color: 0x555555 });
+      const cable = new THREE.Mesh(cableGeo, cableMat);
+      cable.position.y = spec.width / 2 + cableLen / 2;
+      mesh.add(cable);
+
+      // Stash the spinning child so update() can find it without
+      // assuming a specific children[] index.
+      mesh.userData.spinTarget = ball;
+      return mesh;
+    }
+
+    if (spec.kind === 'speaker') {
+      // Cabinet box — the collider geometry.
+      const cabinetGeo = new THREE.BoxGeometry(spec.width, spec.height, spec.depth);
+      const cabinetMat = new THREE.MeshStandardMaterial({
+        color: spec.color, // 0x1c1c1c
+        roughness: 0.5,
+        metalness: 0.2,
+      });
+      const mesh = new THREE.Mesh(cabinetGeo, cabinetMat);
+
+      // Front panel — slightly raised, slightly darker. Sits just
+      // off the +Z face (player-facing side).
+      const panelGeo = new THREE.BoxGeometry(
+        spec.width * 0.86,
+        spec.height * 0.88,
+        0.04,
+      );
+      const panelMat = new THREE.MeshStandardMaterial({
+        color: 0x0e0e0e,
+        roughness: 0.6,
+        metalness: 0.35,
+      });
+      const panel = new THREE.Mesh(panelGeo, panelMat);
+      panel.position.z = spec.depth / 2 + 0.02;
+      mesh.add(panel);
+
+      // Woofer (larger driver, lower half of the front).
+      const wooferR = spec.width * 0.28;
+      const wooferY = -spec.height * 0.13;
+      const wooferZ = spec.depth / 2 + 0.06;
+      // Outer rim — torus.
+      const wooferRimGeo = new THREE.TorusGeometry(wooferR, 0.045, 8, 24);
+      const driverMat = new THREE.MeshStandardMaterial({
+        color: 0x080808,
+        roughness: 0.8,
+        metalness: 0.3,
+      });
+      const wooferRim = new THREE.Mesh(wooferRimGeo, driverMat);
+      wooferRim.position.set(0, wooferY, wooferZ);
+      mesh.add(wooferRim);
+      // Cone — slightly recessed flat disc just behind the rim.
+      const wooferConeGeo = new THREE.CircleGeometry(wooferR * 0.94, 20);
+      const coneMat = new THREE.MeshStandardMaterial({
+        color: 0x040404,
+        roughness: 0.9,
+        metalness: 0.1,
+      });
+      const wooferCone = new THREE.Mesh(wooferConeGeo, coneMat);
+      wooferCone.position.set(0, wooferY, wooferZ - 0.02);
+      mesh.add(wooferCone);
+      // Centre dust cap — small bright dot.
+      const dustCapGeo = new THREE.CircleGeometry(wooferR * 0.18, 14);
+      const dustCapMat = new THREE.MeshStandardMaterial({
+        color: 0x222222,
+        roughness: 0.4,
+        metalness: 0.6,
+      });
+      const dustCap = new THREE.Mesh(dustCapGeo, dustCapMat);
+      dustCap.position.set(0, wooferY, wooferZ + 0.001);
+      mesh.add(dustCap);
+
+      // Tweeter (smaller driver, upper portion).
+      const tweeterR = spec.width * 0.14;
+      const tweeterY = spec.height * 0.27;
+      const tweeterRim = new THREE.Mesh(
+        new THREE.TorusGeometry(tweeterR, 0.032, 6, 18),
+        driverMat,
+      );
+      tweeterRim.position.set(0, tweeterY, wooferZ);
+      mesh.add(tweeterRim);
+      const tweeterCone = new THREE.Mesh(
+        new THREE.CircleGeometry(tweeterR * 0.92, 16),
+        coneMat,
+      );
+      tweeterCone.position.set(0, tweeterY, wooferZ - 0.02);
+      mesh.add(tweeterCone);
+
+      // Tiny power-LED accent — bright spot above the tweeter so
+      // the speaker reads as "on" even in the dark fog.
+      const ledGeo = new THREE.CircleGeometry(0.025, 8);
+      const ledMat = new THREE.MeshBasicMaterial({ color: 0xff5a3a });
+      const led = new THREE.Mesh(ledGeo, ledMat);
+      led.position.set(spec.width * 0.32, spec.height * 0.42, wooferZ);
+      mesh.add(led);
+
+      return mesh;
+    }
+
+    // Default — bouncer + any future floor obstacles. Plain box.
+    const geo = new THREE.BoxGeometry(spec.width, spec.height, spec.depth);
+    const mat = new THREE.MeshStandardMaterial({
+      color: spec.color,
+      roughness: 0.5,
+      metalness: 0.05,
+    });
+    return new THREE.Mesh(geo, mat);
   }
 
   // ── Pickup collection ─────────────────────────────────────────
