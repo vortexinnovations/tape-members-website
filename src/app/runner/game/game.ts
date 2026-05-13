@@ -68,6 +68,12 @@ export class RunnerGame {
   private renderer: THREE.WebGLRenderer;
   private clock = new THREE.Clock();
   private resizeObserver: ResizeObserver | null = null;
+  /**
+   * Vertical FOV (degrees) before any buzz offset. Recomputed on
+   * construction + every resize so the lane edges at x=±2.4 stay
+   * inside the frustum on narrow portrait phones (vFOV widens) and
+   * desktop/landscape (vFOV stays at the visually-clean 55° default).
+   */
   private baseFov = 55;
 
   // Player + lane state
@@ -132,6 +138,7 @@ export class RunnerGame {
     this.renderer.setClearColor(0x070707);
     this.resize();
 
+    this.baseFov = this.computeBaseFov();
     this.camera = new THREE.PerspectiveCamera(
       this.baseFov,
       this.aspect(),
@@ -151,6 +158,33 @@ export class RunnerGame {
   private aspect(): number {
     const r = this.canvas.getBoundingClientRect();
     return r.width / Math.max(1, r.height);
+  }
+
+  /**
+   * Compute the vertical FOV needed to keep the lane edges visible
+   * at the player's distance from camera. Adapts to aspect ratio:
+   * narrow portrait phones get a wider vFOV (so the side lanes
+   * don't fall outside the frustum); landscape/desktop gets the
+   * clean 55° default.
+   *
+   * Math:
+   *   - We want `LANE_VISIBLE_HALF_X` (lane edge + player half-width
+   *     + small margin) to be visible at the camera-to-player view
+   *     distance `PLAYER_VIEW_DIST` (≈ 8.6 units given the current
+   *     camera at (0, 4.5, 8) looking at (0, 1, -6)).
+   *   - That requires horizontal half-angle = atan(half / dist).
+   *   - vertical FOV = 2 * atan(tan(hHalf) / aspect).
+   *   - Clamped to [55, 72] so wide screens don't telephoto and
+   *     ultra-narrow doesn't fisheye.
+   */
+  private computeBaseFov(): number {
+    const LANE_VISIBLE_HALF_X = 3.0; // ±2.4 lane + ±0.5 player + 0.1 margin
+    const PLAYER_VIEW_DIST = 8.6;
+    const aspect = Math.max(0.3, this.aspect());
+    const hHalf = Math.atan(LANE_VISIBLE_HALF_X / PLAYER_VIEW_DIST);
+    const vHalf = Math.atan(Math.tan(hHalf) / aspect);
+    const vFov = (vHalf * 2 * 180) / Math.PI;
+    return Math.min(72, Math.max(55, vFov));
   }
 
   private resize() {
@@ -280,15 +314,21 @@ export class RunnerGame {
   }
 
   private attachResize() {
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', () => this.resize());
-      return;
-    }
-    this.resizeObserver = new ResizeObserver(() => {
+    const onResize = () => {
       this.resize();
       this.camera.aspect = this.aspect();
+      // Recompute base FOV — keeps lane edges visible on narrow
+      // aspect ratios (e.g. rotating phone from landscape → portrait).
+      this.baseFov = this.computeBaseFov();
+      // Don't write camera.fov here — the update() loop layers the
+      // buzz offset on top of baseFov each frame and assigns then.
       this.camera.updateProjectionMatrix();
-    });
+    };
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', onResize);
+      return;
+    }
+    this.resizeObserver = new ResizeObserver(onResize);
     this.resizeObserver.observe(this.canvas);
   }
 
