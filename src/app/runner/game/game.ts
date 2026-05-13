@@ -612,6 +612,20 @@ export class RunnerGame {
     action.setLoop(THREE.LoopOnce, 1);
     action.clampWhenFinished = true;
     this.playerJumpAction = action;
+
+    // Pre-warm shaders + texture uploads for the jump character.
+    // Otherwise the first jump hitches because Three.js compiles
+    // each unique material's WebGL program and uploads the
+    // SkinnedMesh's textures lazily on first render.
+    // `renderer.compile(scene, camera)` walks every VISIBLE
+    // object in `scene` and pre-creates their WebGL programs +
+    // pre-uploads their textures. To include the jump character
+    // (normally hidden), we flip it visible just for the compile
+    // call — no actual rendering happens, so the character doesn't
+    // appear on screen during the briefly-visible window.
+    model.visible = true;
+    this.renderer.compile(this.scene, this.camera);
+    model.visible = false;
   }
 
   /**
