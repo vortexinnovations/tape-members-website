@@ -36,7 +36,6 @@ import { Buzz } from './buzz';
 import { HUD } from './hud';
 import {
   COMBO,
-  comboMultiplier,
   LANES,
   OBSTACLES,
   PICKUPS,
@@ -180,6 +179,16 @@ export class RunnerGame {
   private obstacleIntervalSeconds = SPAWN.OBSTACLE_INTERVAL_BASE_S;
   // Combo window — seconds since the last pickup to keep the chain.
   private comboWindowSeconds: number = COMBO.WINDOW_S;
+  // Combo multiplier tiers — three thresholds + multipliers above
+  // the baseline (which is always 0/1.0). Defaults mirror the
+  // historical hardcoded MULTIPLIERS table in tuning.ts: 5/×1.5,
+  // 10/×2.0, 20/×3.0. Each is admin-overridable via init().
+  private comboTier2Threshold = 5;
+  private comboTier2Multiplier = 1.5;
+  private comboTier3Threshold = 10;
+  private comboTier3Multiplier = 2.0;
+  private comboTier4Threshold = 20;
+  private comboTier4Multiplier = 3.0;
   // Player feel — jump impulse + base lane-change time (buzz still
   // scales the lane time at higher levels).
   private jumpVelocity = PLAYER.JUMP_VY;
@@ -1470,6 +1479,21 @@ export class RunnerGame {
     return this.pickupScoreOverrides[spec.kind] ?? spec.score;
   }
 
+  /**
+   * Combo multiplier for the given combo count, honouring the
+   * three admin-tunable tier thresholds + multipliers. Picks the
+   * highest tier whose threshold the combo satisfies; falls back
+   * to 1.0 below tier 2. Replaces the static `comboMultiplier`
+   * function in tuning.ts (which is no longer wired into the
+   * runtime — kept around as the default baseline).
+   */
+  private getComboMultiplier(combo: number): number {
+    if (combo >= this.comboTier4Threshold) return this.comboTier4Multiplier;
+    if (combo >= this.comboTier3Threshold) return this.comboTier3Multiplier;
+    if (combo >= this.comboTier2Threshold) return this.comboTier2Multiplier;
+    return 1.0;
+  }
+
   private spawnPickup() {
     const spec = this.rollAdjustedPickup();
     // Build the pickup as a Group, parented under an invisible
@@ -2171,7 +2195,7 @@ export class RunnerGame {
       this.combo++;
       this.peakCombo = Math.max(this.peakCombo, this.combo);
       this.comboTimer = 0;
-      const mult = comboMultiplier(this.combo);
+      const mult = this.getComboMultiplier(this.combo);
       // Use admin-tunable score (override map ?? spec default).
       const earned = Math.round(this.getPickupScore(spec) * mult);
       this.score += earned;
@@ -2298,6 +2322,39 @@ export class RunnerGame {
       if (typeof s.speedRamp === 'number') this.speedRamp = s.speedRamp;
       if (typeof s.tipsyDecaySeconds === 'number') {
         this.buzz.setDecaySeconds(s.tipsyDecaySeconds);
+      }
+
+      // ── Buzz scale (max-level) ──────────────────────────────
+      // Number of buzz levels (sober → danger). The HUD meter
+      // generates that many cells; the effects table linearly
+      // interpolates between L0 (sober) and Lmax (danger).
+      if (typeof s.maxTipsyLevel === 'number' && s.maxTipsyLevel >= 2) {
+        this.buzz.setMaxLevel(s.maxTipsyLevel);
+        this.hud.setBuzzMaxLevel(s.maxTipsyLevel);
+      }
+
+      // ── Combo tier overrides ───────────────────────────────
+      // Three tiers above the baseline (which is always 0/×1.0).
+      // Each is independently optional in Firestore; missing
+      // values fall back to the instance defaults (5/×1.5,
+      // 10/×2.0, 20/×3.0).
+      if (typeof s.comboTier2Threshold === 'number' && s.comboTier2Threshold >= 2) {
+        this.comboTier2Threshold = Math.floor(s.comboTier2Threshold);
+      }
+      if (typeof s.comboTier2Multiplier === 'number' && s.comboTier2Multiplier > 0) {
+        this.comboTier2Multiplier = s.comboTier2Multiplier;
+      }
+      if (typeof s.comboTier3Threshold === 'number' && s.comboTier3Threshold >= 2) {
+        this.comboTier3Threshold = Math.floor(s.comboTier3Threshold);
+      }
+      if (typeof s.comboTier3Multiplier === 'number' && s.comboTier3Multiplier > 0) {
+        this.comboTier3Multiplier = s.comboTier3Multiplier;
+      }
+      if (typeof s.comboTier4Threshold === 'number' && s.comboTier4Threshold >= 2) {
+        this.comboTier4Threshold = Math.floor(s.comboTier4Threshold);
+      }
+      if (typeof s.comboTier4Multiplier === 'number' && s.comboTier4Multiplier > 0) {
+        this.comboTier4Multiplier = s.comboTier4Multiplier;
       }
 
       // ── Spawn pacing ────────────────────────────────────────

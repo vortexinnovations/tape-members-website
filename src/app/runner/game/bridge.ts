@@ -39,6 +39,15 @@ export type InitPayload = {
     obstacleIntervalSeconds?: number;
     // ── Combo (Three.js only) ───────────────────────────────────
     comboWindowSeconds?: number;
+    // Three tiers above the always-baseline (combo 0..tier2-1 = ×1.0).
+    // Each tier independently optional. Defaults: 5/×1.5, 10/×2.0,
+    // 20/×3.0. Thresholds must be ≥ 2; multipliers must be > 0.
+    comboTier2Threshold?: number;
+    comboTier2Multiplier?: number;
+    comboTier3Threshold?: number;
+    comboTier3Multiplier?: number;
+    comboTier4Threshold?: number;
+    comboTier4Multiplier?: number;
     // ── Player feel (Three.js only) ─────────────────────────────
     jumpVelocity?: number;
     laneChangeSeconds?: number;

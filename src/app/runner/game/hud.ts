@@ -22,7 +22,18 @@ export class HUD {
   private scoreEl: HTMLDivElement;
   private distEl: HTMLDivElement;
   private comboEl: HTMLDivElement;
+  /** Container for the buzz-meter cells. Stored so `setBuzzMaxLevel`
+   *  can wipe and rebuild the cells when the admin reconfigures
+   *  the max level. */
+  private buzzWrap!: HTMLDivElement;
+  /** A spacer in the top-row that mirrors `buzzWrap`'s width so
+   *  the score column stays visually centred when the combo
+   *  element moves out to its own absolute-positioned slot. */
+  private topRowSpacer!: HTMLDivElement;
   private buzzCells: HTMLDivElement[] = [];
+  /** Cached max-buzz value so setBuzz() knows when to engage the
+   *  danger-zone pulse. Kept in sync with Buzz.getMaxLevel(). */
+  private buzzMaxLevel = 5;
   private vignetteEl: HTMLDivElement;
   /**
    * Transparent overlay positioned above the canvas. Its
@@ -117,8 +128,8 @@ export class HUD {
     this.root.appendChild(topRow);
 
     // Buzz meter — 5 vertical segments stacked into a horizontal pill.
-    const buzzWrap = document.createElement('div');
-    Object.assign(buzzWrap.style, {
+    this.buzzWrap = document.createElement('div');
+    Object.assign(this.buzzWrap.style, {
       display: 'flex',
       gap: '4px',
       padding: '6px 8px',
@@ -129,20 +140,11 @@ export class HUD {
     // -webkit- prefix for older iOS Safari (< 18). Set via
     // setProperty since CSSStyleDeclaration doesn't expose the
     // vendor-prefixed key on its typed surface.
-    buzzWrap.style.setProperty('-webkit-backdrop-filter', 'blur(8px)');
-    for (let i = 0; i < 5; i++) {
-      const cell = document.createElement('div');
-      Object.assign(cell.style, {
-        width: '14px',
-        height: '20px',
-        borderRadius: '4px',
-        background: 'rgba(255, 255, 255, 0.12)',
-        transition: 'background 0.2s ease',
-      } satisfies Partial<CSSStyleDeclaration>);
-      buzzWrap.appendChild(cell);
-      this.buzzCells.push(cell);
-    }
-    topRow.appendChild(buzzWrap);
+    this.buzzWrap.style.setProperty('-webkit-backdrop-filter', 'blur(8px)');
+    // Build the cells via the dedicated helper so we can rebuild
+    // them when the admin changes `maxTipsyLevel` mid-session.
+    this.rebuildBuzzCells(this.buzzMaxLevel);
+    topRow.appendChild(this.buzzWrap);
 
     // Score column (centre)
     const scoreCol = document.createElement('div');
@@ -176,23 +178,41 @@ export class HUD {
     scoreCol.appendChild(this.distEl);
     topRow.appendChild(scoreCol);
 
-    // Combo (right) — hidden until combo >= 2.
+    // Spacer on the right side of the top row — matches the buzz
+    // meter's approximate width so the score column stays visually
+    // centred in the flex `space-between` layout. The combo chip
+    // itself lives separately at the bottom of the screen below
+    // the running character (see `comboEl` below).
+    this.topRowSpacer = document.createElement('div');
+    this.topRowSpacer.style.width = '110px';
+    topRow.appendChild(this.topRowSpacer);
+
+    // Combo chip — absolutely positioned below the character so
+    // it's right in the player's field of view during gameplay,
+    // not tucked away in the corner. Hidden until combo >= 2.
     this.comboEl = document.createElement('div');
     Object.assign(this.comboEl.style, {
-      fontSize: '20px',
-      fontWeight: '800',
+      position: 'absolute',
+      left: '50%',
+      // Sit above the system safe-area inset on phones. `calc` keeps
+      // it ~110 px above the bottom edge regardless of device.
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 100px)',
+      transform: 'translateX(-50%) scale(0.85)',
+      transformOrigin: 'center center',
+      fontSize: '30px',
+      fontWeight: '900',
       letterSpacing: '0.5px',
       fontVariantNumeric: 'tabular-nums',
       color: '#ffd45a',
-      textShadow: '0 0 12px rgba(255, 212, 90, 0.6)',
+      textShadow:
+        '0 0 18px rgba(255, 212, 90, 0.65), 0 2px 8px rgba(0, 0, 0, 0.85)',
       opacity: '0',
-      transition: 'opacity 0.2s ease, transform 0.2s ease',
-      transform: 'scale(0.85)',
-      minWidth: '56px',
-      textAlign: 'right',
+      transition: 'opacity 0.2s ease, transform 0.25s ease',
+      whiteSpace: 'nowrap',
+      zIndex: '4',
     } satisfies Partial<CSSStyleDeclaration>);
     this.comboEl.textContent = '';
-    topRow.appendChild(this.comboEl);
+    this.root.appendChild(this.comboEl);
 
     // ── Full-screen vignette ─────────────────────────────────────
     // Radial gradient mounted at the bottom of the stack so the
@@ -401,21 +421,25 @@ export class HUD {
   }
 
   setBuzz(level: number) {
-    // Fill cells 0..(level-1). At max-buzz (L5 = all 5 cells filled)
-    // the whole meter pulses red — that's the "one more bottle and
-    // you blackout" state. At L4 just the last cell glows softly.
-    const atMax = level >= 5;
-    for (let i = 0; i < this.buzzCells.length; i++) {
+    // Fill cells 0..(level-1). At max-buzz (all cells filled) the
+    // whole meter pulses red — that's the "one more bottle and you
+    // blackout" state. One level below max, the last filled cell
+    // glows softly as a "you're close" warning.
+    const max = this.buzzMaxLevel;
+    const atMax = level >= max;
+    const oneBelowMax = level === max - 1;
+    const total = this.buzzCells.length;
+    for (let i = 0; i < total; i++) {
       const cell = this.buzzCells[i];
       if (i < level) {
-        cell.style.background = colorForCell(i, level);
+        cell.style.background = colorForCell(i, total);
         if (atMax) {
           // Pulse the whole bar at danger zone.
           cell.style.boxShadow = '0 0 10px rgba(255, 60, 60, 0.95)';
           cell.style.animation =
             'tapeRunnerBuzzPulse 0.55s ease-in-out infinite';
-        } else if (level >= 4 && i === level - 1) {
-          // Last cell glows softly at L4 — "you're close."
+        } else if (oneBelowMax && i === level - 1) {
+          // Last cell glows softly — "you're close."
           cell.style.boxShadow = '0 0 8px rgba(255, 80, 80, 0.8)';
           cell.style.animation = 'none';
         } else {
@@ -430,21 +454,59 @@ export class HUD {
     }
   }
 
+  /**
+   * Tear down + rebuild the buzz-meter cells for a new max-level.
+   * Called from `setBuzzMaxLevel` whenever the admin changes the
+   * `maxTipsyLevel` setting, and once during HUD construction.
+   */
+  private rebuildBuzzCells(n: number) {
+    for (const c of this.buzzCells) c.remove();
+    this.buzzCells = [];
+    // Narrow the per-cell width as the count grows so the whole
+    // pill stays roughly the same total width on phones. Floor at
+    // 8px so cells are still tappable-ish at extreme counts.
+    const cellWidth = Math.max(8, Math.min(14, Math.round(70 / n)));
+    for (let i = 0; i < n; i++) {
+      const cell = document.createElement('div');
+      Object.assign(cell.style, {
+        width: `${cellWidth}px`,
+        height: '20px',
+        borderRadius: '4px',
+        background: 'rgba(255, 255, 255, 0.12)',
+        transition: 'background 0.2s ease',
+      } satisfies Partial<CSSStyleDeclaration>);
+      this.buzzWrap.appendChild(cell);
+      this.buzzCells.push(cell);
+    }
+  }
+
+  /**
+   * Reconfigure the buzz meter for a new max-level. Idempotent —
+   * no-op if the requested count matches what's already on screen.
+   */
+  setBuzzMaxLevel(n: number) {
+    if (!Number.isFinite(n)) return;
+    const intN = Math.max(2, Math.min(20, Math.floor(n)));
+    if (intN === this.buzzMaxLevel && this.buzzCells.length === intN) return;
+    this.buzzMaxLevel = intN;
+    this.rebuildBuzzCells(intN);
+  }
+
   setCombo(combo: number, multiplier: number) {
     if (combo < 2) {
       this.comboEl.style.opacity = '0';
-      this.comboEl.style.transform = 'scale(0.85)';
+      this.comboEl.style.transform = 'translateX(-50%) scale(0.85)';
       return;
     }
     this.comboEl.textContent = `×${multiplier.toFixed(multiplier < 2 ? 1 : 0)} ·${combo}`;
     this.comboEl.style.opacity = '1';
-    this.comboEl.style.transform = 'scale(1)';
+    this.comboEl.style.transform = 'translateX(-50%) scale(1)';
     // Auto-fade if no new combo bump arrives soon. The timer is
     // reset every call.
     if (this.comboFadeTimer !== null) window.clearTimeout(this.comboFadeTimer);
     this.comboFadeTimer = window.setTimeout(() => {
       // Soft visual hint that the combo window is closing.
-      this.comboEl.style.transform = 'scale(0.85)';
+      this.comboEl.style.transform = 'translateX(-50%) scale(0.85)';
     }, 1600);
   }
 
@@ -504,25 +566,30 @@ function formatInt(n: number): string {
 }
 
 /**
- * Buzz-meter cell colour, given the cell index (0..4) and the
- * current buzz level (1..5). Green → yellow → orange → red as
- * the meter fills. The last filled cell at level 4+ glows
- * (handled in setBuzz via boxShadow).
+ * Buzz-meter cell colour, computed by sampling a 5-anchor gradient
+ * (pale green → yellow → orange → red-orange → hard red) at the
+ * cell's relative position within the total cell count. With this
+ * approach a 3-cell meter shows green / orange / red; a 10-cell
+ * meter shows a smooth gradient with each step ~12% along the ramp.
  */
-function colorForCell(i: number, _level: number): string {
-  // Each cell has its own colour regardless of level; cell 0 is
-  // green (buzzed = fine), cell 4 is red (about to blackout).
-  switch (i) {
-    case 0:
-      return '#8fe88a'; // pale green
-    case 1:
-      return '#e8e16d'; // yellow
-    case 2:
-      return '#f0a957'; // orange
-    case 3:
-      return '#ec6f5e'; // red-orange
-    case 4:
-    default:
-      return '#e8443c'; // hard red
-  }
+function colorForCell(i: number, total: number): string {
+  const anchors: { r: number; g: number; b: number }[] = [
+    { r: 0x8f, g: 0xe8, b: 0x8a }, // pale green
+    { r: 0xe8, g: 0xe1, b: 0x6d }, // yellow
+    { r: 0xf0, g: 0xa9, b: 0x57 }, // orange
+    { r: 0xec, g: 0x6f, b: 0x5e }, // red-orange
+    { r: 0xe8, g: 0x44, b: 0x3c }, // hard red
+  ];
+  const denom = total <= 1 ? 1 : total - 1;
+  const t = Math.max(0, Math.min(1, i / denom));
+  const pos = t * (anchors.length - 1);
+  const lower = Math.floor(pos);
+  const upper = Math.min(anchors.length - 1, lower + 1);
+  const frac = pos - lower;
+  const a = anchors[lower];
+  const b = anchors[upper];
+  const r = Math.round(a.r + (b.r - a.r) * frac);
+  const g = Math.round(a.g + (b.g - a.g) * frac);
+  const bl = Math.round(a.b + (b.b - a.b) * frac);
+  return `rgb(${r}, ${g}, ${bl})`;
 }
