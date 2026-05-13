@@ -183,6 +183,10 @@ declare global {
       resume(): void;
       /** Force-end the current run (used for testing during the spike). */
       forceGameOver(): void;
+      /** Reset game state for a fresh run without reloading the page
+       *  (avoids re-downloading the ~75 MB of character FBX assets).
+       *  Called from Flutter's "Play again" button. */
+      restart(): void;
     };
   }
 }

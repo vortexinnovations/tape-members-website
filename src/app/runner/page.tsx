@@ -57,6 +57,7 @@ export default function RunnerPage() {
       pause: () => game.pause(),
       resume: () => game.resume(),
       forceGameOver: () => game.forceGameOver(),
+      restart: () => game.restart(),
     };
 
     // Fetch admin tunables directly from the Cloud Function in

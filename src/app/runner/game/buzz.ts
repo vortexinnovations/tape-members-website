@@ -66,6 +66,17 @@ export class Buzz {
   }
 
   /**
+   * Zero out the buzz state for a fresh run. Keeps the configured
+   * `maxLevel`, `decaySeconds`, and `effectMultiplier` (admin
+   * tunables) — those are session-level, not per-run.
+   */
+  reset() {
+    this.level = 0;
+    this.peak = 0;
+    this.decayAccum = 0;
+  }
+
+  /**
    * Configure the buzz state machine to use a different maximum
    * level. Defaults to 5 (the legacy hardcoded value). Lmax always
    * produces the "danger" effects (same intensity as the original

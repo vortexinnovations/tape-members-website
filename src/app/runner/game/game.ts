@@ -169,6 +169,15 @@ export class RunnerGame {
   /** True while we're showing the capsule fallback. Flips false
    *  once a GLB load completes successfully. */
   private isPlaceholderPlayer = true;
+  /**
+   * Per-asset readiness flags. RunnerGame considers itself "ready
+   * to play" once BOTH the player visual + the jump character
+   * have finished loading (or definitively failed). While this is
+   * false the HUD shows a "Loading…" overlay and input is ignored.
+   */
+  private playerAssetReady = false;
+  private jumpAssetReady = false;
+  private assetsReady = false;
   private playerLane = 1;
   // Explicit `number` annotations — without them TS infers the
   // literal type `0` from LANE_X[1] (because LANES.X is `as const`)
@@ -562,20 +571,30 @@ export class RunnerGame {
         `/models/runner_jump_${suffix}.fbx`,
       );
       // If gender flipped while we were loading, drop this one on
-      // the floor — the newer load is in progress.
+      // the floor — the newer load is in progress, which will
+      // settle the readiness flag itself.
       if (this.loadedJumpGender !== suffix) return;
       const clip = (fbx.animations as THREE.AnimationClip[])?.[0];
       if (!clip) {
         // eslint-disable-next-line no-console
         console.debug(`[runner] jump fbx (${suffix}) has no animations`);
         this.loadedJumpGender = '';
+        this.jumpAssetReady = true;
+        this.checkAssetsReady();
         return;
       }
       await this.installJumpCharacter(fbx, clip);
+      this.jumpAssetReady = true;
+      this.checkAssetsReady();
     } catch (e) {
       // eslint-disable-next-line no-console
       console.debug(`[runner] jump character (${suffix}) load failed`, e);
       this.loadedJumpGender = '';
+      // Procedural jump pose handles the load-failure case at
+      // runtime — still flag the asset as "settled" so the
+      // loading overlay clears.
+      this.jumpAssetReady = true;
+      this.checkAssetsReady();
     }
   }
 
@@ -889,6 +908,12 @@ export class RunnerGame {
    */
   private buildPlayerVisual(gender: string) {
     this.buildPlayerVisualPlaceholder(gender);
+    // New gender → new assets → switch the HUD back into loading
+    // state until both finish.
+    this.playerAssetReady = false;
+    this.jumpAssetReady = false;
+    this.assetsReady = false;
+    this.hud.setLoading(true);
     // Fire-and-forget. If the GLB exists, it'll swap in shortly;
     // if not, the placeholder stays and the player is none the wiser.
     this.tryLoadGltfPlayer(gender);
@@ -898,6 +923,20 @@ export class RunnerGame {
     // is already loaded, so flicking gender back and forth via
     // init() doesn't re-fetch.
     this.loadJumpCharacter(gender);
+  }
+
+  /**
+   * Called from `tryLoadGltfPlayer` + `loadJumpCharacter` once
+   * each of those settles (success OR final failure — placeholder
+   * + procedural fallback are still valid play states). When both
+   * have settled, flips `assetsReady` true and tells the HUD to
+   * switch from "Loading…" to the "Swipe to start" hint.
+   */
+  private checkAssetsReady() {
+    if (this.assetsReady) return;
+    if (!this.playerAssetReady || !this.jumpAssetReady) return;
+    this.assetsReady = true;
+    this.hud.setLoading(false);
   }
 
   /**
@@ -1267,7 +1306,14 @@ export class RunnerGame {
       }
     }
 
-    if (!scene) return; // both candidates failed; keep placeholder
+    if (!scene) {
+      // Both candidates failed — placeholder stays in use. Still
+      // counts as "asset settled" so the loading overlay can
+      // clear and the user can play with the capsule fallback.
+      this.playerAssetReady = true;
+      this.checkAssetsReady();
+      return;
+    }
 
     // If a newer call to buildPlayerVisual ran while we awaited
     // (e.g. init() arrived twice with different genders), bail.
@@ -1368,6 +1414,10 @@ export class RunnerGame {
     // Runs after the visual is in place so traverse finds the
     // FBX-loaded bones, not the placeholder Group's children.
     this.cacheJumpPoseBones();
+    // Player asset has settled — flag it so the loading overlay
+    // can clear if the jump character has also settled.
+    this.playerAssetReady = true;
+    this.checkAssetsReady();
   }
 
   /**
@@ -1494,12 +1544,12 @@ export class RunnerGame {
   }
 
   private swipeLeft() {
-    if (this.gameOver || !this.running) return;
+    if (this.gameOver || !this.running || !this.assetsReady) return;
     this.startGameIfNotStarted();
     if (this.playerLane > 0) this.setLane(this.playerLane - 1);
   }
   private swipeRight() {
-    if (this.gameOver || !this.running) return;
+    if (this.gameOver || !this.running || !this.assetsReady) return;
     this.startGameIfNotStarted();
     if (this.playerLane < LANES.X.length - 1)
       this.setLane(this.playerLane + 1);
@@ -1516,7 +1566,7 @@ export class RunnerGame {
     this.laneChangeDuration = this.laneChangeBaseSeconds * slow;
   }
   private jump() {
-    if (this.gameOver || !this.running) return;
+    if (this.gameOver || !this.running || !this.assetsReady) return;
     this.startGameIfNotStarted();
     if (this.playerY > PLAYER.BASE_Y + 0.05) return; // already airborne
     this.playerVy = this.jumpVelocity;
@@ -3237,6 +3287,118 @@ export class RunnerGame {
   /** Force-end the current run (used for spike testing). */
   forceGameOver() {
     if (!this.gameOver) this.endGame('manual');
+  }
+
+  /**
+   * Reset all game state for a fresh run WITHOUT re-loading any
+   * assets. Called from the bridge when the Flutter "Play again"
+   * button is tapped — saves the ~75 MB of FBX re-downloads
+   * we'd otherwise pay for a full WebView reload.
+   *
+   * Reset surface:
+   *  - Game-over / gameStarted flags
+   *  - Score, distance, duration, combo, buzz peaks
+   *  - Player position (lane center, ground level)
+   *  - Speed back to startSpeed
+   *  - All spawned pickups + obstacles disposed
+   *  - Run animation rewinds + plays
+   *  - HUD counters zeroed, input hint shown again
+   *
+   * Preserved:
+   *  - Loaded character + jump character + bouncer model
+   *  - Admin tunables from the most recent init()
+   *  - Renderer, scene, lighting rig
+   *  - Asset-ready flags (we don't need to re-load)
+   */
+  restart() {
+    // Game flags
+    this.gameOver = false;
+    this.gameStarted = false;
+    this.running = true;
+
+    // Counters
+    this.score = 0;
+    this.bottlesCollected = 0;
+    this.watersUsed = 0;
+    this.combo = 0;
+    this.peakCombo = 0;
+    this.comboTimer = 0;
+    this.distance = 0;
+    this.duration = 0;
+    this.previewClock = 0;
+    this.speed = this.startSpeed;
+
+    // Player position + lane
+    this.playerY = PLAYER.BASE_Y;
+    this.playerVy = 0;
+    this.playerLane = 1;
+    this.targetX = LANES.X[1];
+    this.laneChangeStartX = LANES.X[1];
+    this.laneChangeTime = 0;
+    this.wasInAir = false;
+    this.player.position.set(LANES.X[1], PLAYER.BASE_Y, 0);
+
+    // Buzz state
+    this.buzz.reset();
+
+    // Spawn accumulators (so a fresh batch fires at the new
+    // pickup/obstacle interval rather than spawning immediately).
+    this.spawnAccumPickup = 0;
+    this.spawnAccumObstacle = 0;
+
+    // Tear down every spawned pickup + obstacle.
+    for (const p of this.pickups) {
+      this.scene.remove(p.mesh);
+      this.disposeMesh(p.mesh);
+    }
+    this.pickups = [];
+    for (const o of this.obstacles) {
+      this.scene.remove(o.mesh);
+      if (o.mixer) {
+        o.mixer.stopAllAction();
+        o.mixer.uncacheRoot(o.mixer.getRoot());
+      }
+      if (o.spec.kind === 'bouncer' && o.mixer) {
+        // Shared GLTF — only dispose the invisible collider's
+        // per-instance geometry + material (mirrors the despawn
+        // path's logic).
+        o.mesh.geometry.dispose();
+        const cm = o.mesh.material;
+        if (Array.isArray(cm)) cm.forEach((m) => m.dispose());
+        else cm.dispose();
+      } else {
+        this.disposeMesh(o.mesh);
+      }
+    }
+    this.obstacles = [];
+
+    // Restart the run animation cleanly.
+    if (this.playerRunAction) {
+      this.playerRunAction.reset();
+      this.playerRunAction.enabled = true;
+      this.playerRunAction.play();
+    }
+    // Swap visibility back to the running character (in case
+    // game over happened mid-jump).
+    if (this.playerVisual) this.playerVisual.visible = true;
+    if (this.playerJumpVisual) {
+      this.playerJumpVisual.visible = false;
+      if (this.playerJumpAction) {
+        this.playerJumpAction.stop();
+        this.playerJumpAction.reset();
+      }
+    }
+
+    // HUD: zero the score/distance/combo, drop buzz overlay,
+    // and bring the swipe-to-start hint back so the user knows
+    // the new run is waiting on their first input.
+    this.hud.setScore(0);
+    this.hud.setDistance(0);
+    this.hud.setCombo(0, 1);
+    this.hud.setBuzz(0);
+    this.hud.setBlur(0);
+    this.hud.setVignette(0);
+    this.hud.showInputHint();
   }
 
   private endGame(reason: GameOverMessage['reason']) {

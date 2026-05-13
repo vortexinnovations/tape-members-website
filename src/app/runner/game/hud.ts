@@ -93,6 +93,10 @@ export class HUD {
           0%, 100% { opacity: 0.7; }
           50% { opacity: 1.0; }
         }
+        @keyframes tapeRunnerSpin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
       `;
       document.head.appendChild(style);
     }
@@ -416,6 +420,7 @@ export class HUD {
     arrowRow.appendChild(makeArrow('↑', 'tapeRunnerHintUp', 'JUMP', 28));
     arrowRow.appendChild(makeArrow('→', 'tapeRunnerHintRight', 'DODGE'));
     this.inputHintEl.appendChild(arrowRow);
+    this.hintArrowRow = arrowRow;
 
     const startLabel = document.createElement('div');
     startLabel.textContent = 'SWIPE TO START';
@@ -428,9 +433,66 @@ export class HUD {
       animation: 'tapeRunnerHintLabel 1.6s ease-in-out infinite',
     });
     this.inputHintEl.appendChild(startLabel);
+    this.hintStartLabel = startLabel;
+
+    // ── Loading state — shown until all heavy assets (player FBX
+    // + jump character + bouncer + initial pre-warm) are ready.
+    // Sits inside the same overlay so we don't fight z-index with
+    // the "swipe to start" hint; we toggle visibility on each.
+    const loadingWrap = document.createElement('div');
+    Object.assign(loadingWrap.style, {
+      display: 'none',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: '20px',
+    });
+    const spinner = document.createElement('div');
+    Object.assign(spinner.style, {
+      width: '54px',
+      height: '54px',
+      borderRadius: '50%',
+      border: '4px solid rgba(255, 255, 255, 0.18)',
+      borderTopColor: '#fff',
+      animation: 'tapeRunnerSpin 0.9s linear infinite',
+    });
+    loadingWrap.appendChild(spinner);
+    const loadingLabel = document.createElement('div');
+    loadingLabel.textContent = 'LOADING…';
+    Object.assign(loadingLabel.style, {
+      fontSize: '15px',
+      fontWeight: '800',
+      letterSpacing: '3.5px',
+      color: '#fff',
+      textShadow: '0 2px 10px rgba(0, 0, 0, 0.9)',
+    });
+    loadingWrap.appendChild(loadingLabel);
+    this.inputHintEl.appendChild(loadingWrap);
+    this.hintLoadingWrap = loadingWrap;
 
     parent.appendChild(this.inputHintEl);
   }
+
+  /** Switch the overlay between "Loading…" and the swipe-to-start
+   *  hint. RunnerGame flips this once the player FBX + jump
+   *  character are both loaded and the GPU pre-warm pipeline has
+   *  run. While loading is true the input handler should also
+   *  ignore taps/swipes. */
+  setLoading(loading: boolean) {
+    if (loading) {
+      this.hintArrowRow.style.display = 'none';
+      this.hintStartLabel.style.display = 'none';
+      this.hintLoadingWrap.style.display = 'flex';
+      this.inputHintEl.style.opacity = '1';
+    } else {
+      this.hintLoadingWrap.style.display = 'none';
+      this.hintArrowRow.style.display = '';
+      this.hintStartLabel.style.display = '';
+    }
+  }
+
+  private hintArrowRow!: HTMLDivElement;
+  private hintStartLabel!: HTMLDivElement;
+  private hintLoadingWrap!: HTMLDivElement;
 
   /**
    * Hide the pre-game tutorial overlay. Called by RunnerGame the
