@@ -25,7 +25,10 @@ import {
   type GLTF,
 } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
-import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import {
+  clone as cloneSkinned,
+  retargetClip,
+} from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 import {
   postToFlutter,
@@ -136,16 +139,22 @@ export class RunnerGame {
   private playerMixer?: THREE.AnimationMixer;
   private playerRunAction?: THREE.AnimationAction;
   /**
-   * Mixamo Jump clip loaded from `/models/runner_jump.fbx` (the
-   * "Without Skin" animation-only export, ~375 KB). FBXLoader
-   * produces a clip whose tracks reference bones by name. We
-   * apply it to the player by creating one action per
-   * SkinnedMesh, scoping each action to that mesh's skeleton so
-   * PropertyBinding resolves the names via `mesh.skeleton.getBoneByName(...)`
-   * — unambiguous lookup, no false-positive scene-graph
-   * matches against the duplicate Object3Ds named `mixamorig7Hips`.
+   * Mixamo Jump clip loaded from `/models/runner_jump.fbx`
+   * (animation-only "Without Skin" export, ~375 KB).
    */
   private playerJumpClip?: THREE.AnimationClip;
+  /**
+   * The animation-source character — the FBX scene the jump clip
+   * was authored against. Kept so `SkeletonUtils.retargetClip(target,
+   * source, clip)` can sample the source's posed bones each frame
+   * and rebake them onto each target SkinnedMesh's specific
+   * skeleton. Crucial for bind-pose-difference correction: the
+   * Mixamo Jump export was authored against a generic character
+   * (Y-Bot or similar) whose bone rest orientations don't match
+   * our Ch33 player's exactly. Without retargeting the joints go
+   * jelly / twist weirdly during the jump.
+   */
+  private playerJumpSource?: THREE.Group;
   /**
    * One action per player SkinnedMesh, all sharing the same
    * jump clip. Each action drives ITS mesh's specific skeleton.
@@ -538,12 +547,34 @@ export class RunnerGame {
         console.debug('[runner] jump fbx has no animations');
         return;
       }
+      // Build a Skeleton from the FBX's bones and attach it to the
+      // scene's root as `.skeleton`. SkeletonUtils.retargetClip
+      // reads `source.skeleton.bones` (line 52 of SkeletonUtils.js),
+      // and FBXLoader only attaches `.skeleton` to SkinnedMeshes —
+      // animation-only "Without Skin" exports have no SkinnedMesh,
+      // so we have to construct one ourselves.
+      const sourceBones: THREE.Bone[] = [];
+      fbx.traverse((obj) => {
+        if (obj instanceof THREE.Bone) sourceBones.push(obj);
+      });
+      if (sourceBones.length === 0) {
+        // eslint-disable-next-line no-console
+        console.debug('[runner] jump fbx has no bones to retarget from');
+        return;
+      }
+      const sourceSkeleton = new THREE.Skeleton(sourceBones);
+      // Three.js's Group type doesn't have a typed `.skeleton`
+      // accessor, but retarget() reads it as a plain property —
+      // works at runtime. Cast through unknown so TS allows it.
+      (fbx as unknown as { skeleton: THREE.Skeleton }).skeleton =
+        sourceSkeleton;
       // Strip ALL root-bone translation (X+Y+Z) so the clip is pure
       // pose change. Mixamo's Jump translates the Hips ~1m during
       // the leap; our collider already arcs vertically via
       // `playerY`. Without stripping, the two stack and the
       // character flies ~twice as high as intended.
       this.playerJumpClip = this.stripAllRootMotion(raw);
+      this.playerJumpSource = fbx;
       if (this.playerMixer && this.playerVisual) this.setupJumpAction();
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -1151,35 +1182,45 @@ export class RunnerGame {
   }
 
   /**
-   * Create one jump action per SkinnedMesh in the player, each
-   * scoped to that mesh's skeleton.
+   * For each player SkinnedMesh, use `SkeletonUtils.retargetClip`
+   * to bake a clip that respects THAT mesh's bind-pose rest
+   * orientations. Then create an action against the retargeted
+   * clip, scoped to the mesh.
    *
-   * Why per-SkinnedMesh: the player FBX has 9 SkinnedMeshes with
-   * overlapping bone names (5 different Object3Ds named
-   * `mixamorig7Hips`, etc.). Default `clipAction(clip)` does
-   * scene-graph name search via `PropertyBinding.findNode`, which
-   * returns the first depth-first match — often a locator/scene
-   * node, not the Bone the SkinnedMeshes' GPU skinning uses. So
-   * the binding "succeeds" but lands on the wrong Object3D.
+   * Two problems retargeting fixes:
    *
-   * Passing the SkinnedMesh as the second arg flips PropertyBinding
-   * to use `mesh.skeleton.getBoneByName(...)` first — the
-   * unambiguous, GPU-bound bone lookup. Each mesh gets its own
-   * action because each mesh's vertices are weighted to ITS
-   * skeleton's specific bones (the diagnostic confirmed different
-   * UUIDs across meshes).
+   * 1. Bind-pose mismatch (the "jelly bones" symptom). Mixamo's
+   *    standalone "Jump" export is authored against a generic
+   *    character whose bone rest orientations differ from our
+   *    specific Ch33 character. Applying the clip's local-frame
+   *    rotations directly to differently-oriented bones twists
+   *    the joints. retargetClip samples the source's posed bone
+   *    transforms each frame, then converts to the target's
+   *    bind-pose space — so the visual pose matches even with
+   *    different rest orientations.
+   *
+   * 2. Bone-name collisions in the scene graph (the original
+   *    T-pose symptom). retargetClip produces tracks with
+   *    `.bones[NAME]` syntax that resolve directly through
+   *    `mesh.skeleton.bones[NAME]` — no false-positive matches
+   *    against the 5 duplicate `mixamorig7Hips` Object3Ds.
    *
    * `enabled = false` (NOT setEffectiveWeight(0)) hides the
    * action until trigger. setEffectiveWeight(0) sets
    * `this.weight = 0`, which then KILLS fadeIn — Three.js
    * computes effective weight as `this.weight * interpolantValue`,
-   * so 0 × (0→1) is 0 forever. `enabled = false` keeps
-   * `this.weight = 1` (the default) so the later `reset()` +
-   * `fadeIn` actually ramps in.
+   * so 0 × (0→1) is 0 forever.
    */
   private setupJumpAction() {
     if (this.playerJumpActions.length > 0) return; // already wired
-    if (!this.playerJumpClip || !this.playerMixer || !this.playerVisual) return;
+    if (
+      !this.playerJumpClip ||
+      !this.playerJumpSource ||
+      !this.playerMixer ||
+      !this.playerVisual
+    ) {
+      return;
+    }
 
     const skinnedMeshes: THREE.SkinnedMesh[] = [];
     this.playerVisual.traverse((obj) => {
@@ -1188,13 +1229,36 @@ export class RunnerGame {
     if (skinnedMeshes.length === 0) return;
 
     for (const mesh of skinnedMeshes) {
-      const action = this.playerMixer.clipAction(this.playerJumpClip, mesh);
+      let retargeted: THREE.AnimationClip;
+      try {
+        retargeted = retargetClip(
+          mesh,
+          this.playerJumpSource,
+          this.playerJumpClip,
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(`[runner/jump] retargetClip failed for ${mesh.name}`, e);
+        continue;
+      }
+      if (retargeted.tracks.length === 0) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `[runner/jump] retargeted ${mesh.name} has 0 tracks (skeleton has no matching bones) — skip`,
+        );
+        continue;
+      }
+      const action = this.playerMixer.clipAction(retargeted, mesh);
       action.setLoop(THREE.LoopOnce, 1);
-      action.clampWhenFinished = true; // hold the last frame after landing
+      action.clampWhenFinished = true;
       action.play();
-      action.enabled = false; // invisible until trigger; see comment above
+      action.enabled = false;
       this.playerJumpActions.push(action);
     }
+    // eslint-disable-next-line no-console
+    console.log(
+      `[runner/jump] setup complete: ${this.playerJumpActions.length}/${skinnedMeshes.length} actions wired`,
+    );
   }
 
   // ── Input ───────────────────────────────────────────────────────
