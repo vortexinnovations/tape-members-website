@@ -95,6 +95,21 @@ export class RunnerGame {
   private obstacles: ActiveObstacle[] = [];
   private spawnAccumPickup = 0;
   private spawnAccumObstacle = 0;
+  /**
+   * Nightclub lighting rig. Each entry pulses on its own frequency
+   * so the lighting feels "alive" (real club rigs are never fully
+   * synchronised). The lights also drift slowly along the runway
+   * so the brightness pattern under the player isn't static.
+   * Animated in update() via `tickClubLights()`.
+   */
+  private clubLights: {
+    light: THREE.PointLight;
+    baseIntensity: number;
+    pulseHz: number;
+    phase: number;
+    baseZ: number;
+    driftAmp: number;
+  }[] = [];
 
   // HUD overlay (DOM) — created on construction, owns vignette + counters.
   private hud: HUD;
@@ -203,22 +218,69 @@ export class RunnerGame {
   // ── Scene build ─────────────────────────────────────────────────
 
   private buildScene() {
-    // Lighting — one directional + ambient + a magenta rim for
-    // mild nightclub mood. Cheap, no shadows.
-    const ambient = new THREE.AmbientLight(0xffffff, 0.45);
-    this.scene.add(ambient);
-    const dir = new THREE.DirectionalLight(0xffffff, 0.85);
-    dir.position.set(2, 10, 4);
-    this.scene.add(dir);
-    const rim = new THREE.DirectionalLight(0xc34a8e, 0.35);
-    rim.position.set(-4, 6, -8);
-    this.scene.add(rim);
+    // ── Fog ─────────────────────────────────────────────────────
+    // Magenta-tinted exponential fog so obstacles fade in from the
+    // spawn distance instead of popping into view. Density tuned so
+    // SPAWN_Z (-70) is mostly invisible and obstacles become clearly
+    // readable around z=-40. Sells "underground club" atmosphere
+    // and hides the spawn boundary at the same time.
+    // Background MUST match fog colour, otherwise distant geometry
+    // fogs into one colour while the empty "sky" is another and the
+    // player sees a visible horizon band where they meet.
+    const fogColor = 0x1a0814;
+    this.scene.fog = new THREE.FogExp2(fogColor, 0.020);
+    this.scene.background = new THREE.Color(fogColor);
 
-    // Ground — dark tinted plane far into -Z.
+    // ── Lighting rig ────────────────────────────────────────────
+    // Faint ambient so unlit faces of obstacles aren't pure black —
+    // keeps the bottle silhouettes readable in the dark.
+    const ambient = new THREE.AmbientLight(0x2a1428, 0.55);
+    this.scene.add(ambient);
+    // Soft warm "house lights" overall directional — enough to read
+    // the player and floor without washing out the colored rig.
+    const house = new THREE.DirectionalLight(0xfff3e0, 0.35);
+    house.position.set(0, 12, 2);
+    this.scene.add(house);
+
+    // Three colored point lights drifting along the runway. Each
+    // pulses on its own frequency — feels "live" not synchronised.
+    // Palette: magenta + cyan + warm amber. Stays on-brand without
+    // looking like a kids'-toy rainbow.
+    const lightSpecs: {
+      color: number;
+      intensity: number;
+      hz: number;
+      phase: number;
+      z: number;
+      driftAmp: number;
+    }[] = [
+      { color: 0xff2a8c, intensity: 18.0, hz: 0.55, phase: 0.0,  z: -12, driftAmp: 6 },
+      { color: 0x2aa8ff, intensity: 14.0, hz: 0.82, phase: 1.3,  z: -24, driftAmp: 8 },
+      { color: 0xffb060, intensity: 12.0, hz: 1.10, phase: 2.7,  z: -36, driftAmp: 10 },
+    ];
+    for (const s of lightSpecs) {
+      const light = new THREE.PointLight(s.color, s.intensity, 60, 1.6);
+      light.position.set(0, 7, s.z);
+      this.scene.add(light);
+      this.clubLights.push({
+        light,
+        baseIntensity: s.intensity,
+        pulseHz: s.hz,
+        phase: s.phase,
+        baseZ: s.z,
+        driftAmp: s.driftAmp,
+      });
+    }
+
+    // ── Ground ──────────────────────────────────────────────────
+    // Slightly metallic so the coloured point lights catch on it
+    // and the floor visually pulses with the rig. Roughness still
+    // high so it doesn't look like a chrome mirror.
     const groundGeo = new THREE.PlaneGeometry(20, 200);
     const groundMat = new THREE.MeshStandardMaterial({
-      color: 0x140a0f,
-      roughness: 0.9,
+      color: 0x140a10,
+      roughness: 0.55,
+      metalness: 0.35,
     });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
@@ -449,6 +511,9 @@ export class RunnerGame {
       if (s.position.z > 4) s.position.z -= 90;
     }
 
+    // ── Animate club lights ───────────────────────────────────
+    this.tickClubLights(this.duration);
+
     // ── Scroll pickups, check collection / pass ────────────────
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const p = this.pickups[i];
@@ -520,6 +585,29 @@ export class RunnerGame {
     // Combo HUD is set inside collectPickup() — the timed fade
     // happens via the HUD's internal timer, so we don't re-set
     // here every frame.
+  }
+
+  // ── Lighting animation ─────────────────────────────────────────
+
+  /**
+   * Pulse + drift each point light independently. Pulse uses a
+   * scaled sine so intensity stays in [0.35, 1.15] × base — never
+   * fully dark (a club rig doesn't black out mid-set) but with
+   * enough swing to feel alive. Drift slides each light along Z
+   * over time so the bright spot on the floor isn't static, which
+   * adds a sense of motion separate from the world scroll.
+   */
+  private tickClubLights(t: number) {
+    for (const c of this.clubLights) {
+      const phase = t * c.pulseHz * Math.PI * 2 + c.phase;
+      const pulse = 0.75 + 0.40 * Math.sin(phase);
+      c.light.intensity = c.baseIntensity * pulse;
+      // Drift along Z — different phase so each light moves
+      // independently. Range is small (driftAmp units), so lights
+      // sweep over the runway gently rather than flying around.
+      c.light.position.z =
+        c.baseZ + Math.sin(t * c.pulseHz * 0.5 + c.phase) * c.driftAmp;
+    }
   }
 
   // ── Spawning ────────────────────────────────────────────────────
