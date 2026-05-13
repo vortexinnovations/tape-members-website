@@ -1390,16 +1390,23 @@ export class RunnerGame {
     const SPACING_Z = 9;           // podium every 9 m of track (alternating sides)
     const SIDE_X = 5.25;           // 1.5 m past the rope at X = ±3.75
     // ── Plinth dimensions ────────────────────────────────────
-    const PLINTH_W = 1.0;          // square footprint, slightly wider than the cage
-    const PLINTH_H = 0.15;         // low — reads as "raised platform" not "table"
+    const PLINTH_W = 1.3;          // square footprint, slightly wider than the cage
+    const PLINTH_H = 0.50;         // substantial — reads as "raised stage" the
+                                   // way Tape's real venue installs them. 3.3×
+                                   // the original 0.15 m starter height.
     // ── Cage (hollow) dimensions ─────────────────────────────
-    const CAGE_W = 0.7;            // square footprint
+    const CAGE_W = 0.9;            // square footprint — wider than v1 (was 0.7)
+                                   // so the cage reads as a real stage you can
+                                   // imagine standing on, not a slim pillar
     const CAGE_H = 3.0;            // tall enough to dwarf the 1.8 m runner
-    const LED_RADIUS = 0.045;      // thin glow tubes
+    const LED_RADIUS = 0.055;      // thin glow tubes — bumped proportionally
+                                   // with the wider cage so the LEDs still
+                                   // read clearly at speed
     const PLINTH_TOP = PLINTH_H;   // y of cage base
     const CAGE_TOP = PLINTH_H + CAGE_H;
     // ── Misc ─────────────────────────────────────────────────
-    const GLOW_RADIUS = 1.4;
+    const GLOW_RADIUS = 1.6;       // bumped for the wider plinth so the glow
+                                   // disc still extends past the plinth edge
     // TAPE red — slightly warm magenta-red.
     const LED_COLOR_BASE = 0xff0033;
 
