@@ -220,22 +220,32 @@ export class RunnerGame {
    */
   private velvetRopes: THREE.Group[] = [];
   /**
-   * TAPE dancer podiums — tall, slim columns with vertical LED
-   * edge strips, mounted just past the velvet rope on alternating
-   * sides of the runway. Reads as "you're sprinting past Tape's
-   * iconic light pillars." Each entry has its own pulse phase so
-   * the row creates a travelling wave of intensity along the
-   * track. Recycled in the update loop the same way as the rope.
+   * TAPE dancer podiums — a hollow cage of 8 LED edges (4 vertical
+   * corner columns + 4 horizontal top-frame rails) sitting on a
+   * raised plinth, with a faintly glowing square panel inside the
+   * top frame to read as a "lit lid." Mounted just past the
+   * velvet rope on alternating sides of the runway. Pure Tape
+   * London iconography — anyone who's been to the venue will
+   * recognise the look immediately.
    *
-   * The 4 LED edge materials per podium are pulsed by mutating
-   * `material.color` directly (MeshBasicMaterial — unlit, so the
-   * RGB values ARE the on-screen pixel brightness). Each podium
-   * holds its own set of edge materials in `ledMats` for per-tick
-   * intensity modulation.
+   * Per podium:
+   *  - `ledMat`     — one MeshBasicMaterial shared across all 8
+   *                   LED tubes (vertical corners + horizontal top
+   *                   rails). Pulse mutates this material's color
+   *                   so every LED on the podium breathes in unison.
+   *  - `panelMat`   — separate material for the translucent top
+   *                   lid panel. Lower opacity than the LED tubes
+   *                   so the frame reads as the brightness anchor
+   *                   and the panel is a soft fill.
+   *  - `glowMat`    — soft additive disc on the floor at the base.
+   *
+   * Per-podium `phase` offset on the pulse means the row creates
+   * a travelling wave of intensity along the track.
    */
   private dancerPodiums: {
     group: THREE.Group;
-    ledMats: THREE.MeshBasicMaterial[];
+    ledMat: THREE.MeshBasicMaterial;
+    panelMat: THREE.MeshBasicMaterial;
     glowMat: THREE.MeshBasicMaterial;
     phase: number;
   }[] = [];
@@ -1346,133 +1356,181 @@ export class RunnerGame {
   }
 
   /**
-   * Build TAPE London's signature dancer podiums — tall, slim
-   * columns with vertical LED edge strips pulsing in red. Sit
-   * just past the velvet rope on both sides, alternating left/
-   * right so the player sees a podium pass every ~9 m of track
-   * (~1.5 s at start speed, ~0.65 s at max speed). Each podium
-   * has:
+   * Build TAPE London's signature dancer podiums — a hollow cage
+   * of LED tubes (4 vertical corners + 4 horizontal top rails)
+   * mounted on a raised plinth, capped with a faintly glowing
+   * square panel inside the top frame.
    *
-   *  - A matte black body box (the structure)
-   *  - 4 emissive red cylinders along its vertical corners (the
-   *    LED edges — this is what reads as "TAPE podium")
-   *  - A small alpha-blended glow disc on the floor at its base
-   *    (sells "it's lit, light is spilling onto the floor")
+   * Layout: just past the velvet rope on alternating L/R sides,
+   * a podium every ~9 m of track (~1.5 s at start speed, ~0.65 s
+   * at max speed).
    *
-   * Per-podium phase offset on the pulse means the row of
-   * podiums creates a travelling wave of brightness — the column
-   * nearest the player breathes brighter, then the next one back
-   * picks up, then the next, etc. Reads as a Tape light cue, not
-   * a flat row of glowing boxes.
+   * Anatomy of one podium (bottom → top):
+   *
+   *  - Plinth: low, slightly wider matte-black box (~1.0 m square,
+   *    0.15 m tall) — the raised platform the cage sits on.
+   *  - Hollow cage: 4 vertical red LED tubes rising from the
+   *    plinth top to the cage top. Empty interior — a dancer
+   *    character can be slotted in later without geometry conflict.
+   *  - Top "lid": 4 horizontal red LED tubes forming a square
+   *    frame at the cage top + a translucent emissive panel just
+   *    inside the frame so the top reads as a closed, lit ceiling.
+   *  - Floor glow: soft additive red disc on the floor around the
+   *    plinth — light spilling out from the cage.
+   *
+   * Per-podium phase offset on the pulse creates a travelling
+   * wave of brightness along the row — the podium nearest the
+   * player breathes bright, then the next, then the next.
    *
    * Pool size mirrors the velvet rope wavelength (90 m) so the
-   * two systems recycle in lockstep — no awkward visual beating
-   * between rope spacing and podium spacing.
+   * two systems recycle in lockstep.
    */
   private buildDancerPodiums() {
     const POOL_LENGTH = 90;        // matches floor-stripe / rope wavelength
     const SPACING_Z = 9;           // podium every 9 m of track (alternating sides)
     const SIDE_X = 5.25;           // 1.5 m past the rope at X = ±3.75
-    const PODIUM_W = 0.7;          // base footprint width
-    const PODIUM_D = 0.7;          // base footprint depth
-    const PODIUM_H = 3.0;          // tall enough to dwarf the 1.8 m runner
-    const LED_RADIUS = 0.045;      // thin glow tubes — sized to read at speed
-    const BODY_INSET = 0.02;       // body slightly inside the LED edges
-                                   // so the corners glow free of the box
-    const GLOW_RADIUS = 1.4;       // floor glow disc size
-    // TAPE red — slightly warm magenta-red. Adjust here to retheme
-    // every podium globally (Pride, Halloween, etc.).
+    // ── Plinth dimensions ────────────────────────────────────
+    const PLINTH_W = 1.0;          // square footprint, slightly wider than the cage
+    const PLINTH_H = 0.15;         // low — reads as "raised platform" not "table"
+    // ── Cage (hollow) dimensions ─────────────────────────────
+    const CAGE_W = 0.7;            // square footprint
+    const CAGE_H = 3.0;            // tall enough to dwarf the 1.8 m runner
+    const LED_RADIUS = 0.045;      // thin glow tubes
+    const PLINTH_TOP = PLINTH_H;   // y of cage base
+    const CAGE_TOP = PLINTH_H + CAGE_H;
+    // ── Misc ─────────────────────────────────────────────────
+    const GLOW_RADIUS = 1.4;
+    // TAPE red — slightly warm magenta-red.
     const LED_COLOR_BASE = 0xff0033;
 
     // ── Shared geometries ─────────────────────────────────────
-    // Body: black box, slightly smaller than the LED-edge cage
-    // so the corner LEDs sit proud of the body's face. y=0 at the
-    // base (BoxGeometry is origin-centred by default).
-    const bodyGeo = new THREE.BoxGeometry(
-      PODIUM_W - 2 * BODY_INSET,
-      PODIUM_H,
-      PODIUM_D - 2 * BODY_INSET,
-    );
-    bodyGeo.translate(0, PODIUM_H / 2, 0);
-    // LED edge: thin vertical cylinder, base at y=0 (Three.js
-    // cylinders are origin-centred, so translate up by half its
-    // length). 8 radial segments — these are skinny tubes seen
-    // at distance + speed; 8 is enough to dodge faceting.
-    const ledGeo = new THREE.CylinderGeometry(
+    // Plinth: low box. Origin-centred → translate up by half so
+    // y=0 sits on the floor.
+    const plinthGeo = new THREE.BoxGeometry(PLINTH_W, PLINTH_H, PLINTH_W);
+    plinthGeo.translate(0, PLINTH_H / 2, 0);
+    // Vertical LED tube — base at y=0 (we position each via the
+    // mesh, not the geometry, since 4 corners share this geo).
+    const ledVertGeo = new THREE.CylinderGeometry(
       LED_RADIUS,
       LED_RADIUS,
-      PODIUM_H,
+      CAGE_H,
       8,
     );
-    ledGeo.translate(0, PODIUM_H / 2, 0);
-    // Floor glow: flat circle laid on the floor at the podium's
-    // base. Additive-blended so it brightens whatever's underneath
-    // (floor stripes, rope shadow) rather than sitting opaquely
-    // on top.
+    ledVertGeo.translate(0, CAGE_H / 2, 0);
+    // Horizontal LED rail — length = cage width. Default cylinder
+    // axis is Y, so rotate to Z for two of the four top rails;
+    // the other two get rotated to X. We build one shared
+    // "horizontal along X" geometry and just rotate the meshes
+    // 90° on Y for the perpendicular pair (cheap, no new geom).
+    const ledHorizGeo = new THREE.CylinderGeometry(
+      LED_RADIUS,
+      LED_RADIUS,
+      CAGE_W,
+      8,
+    );
+    ledHorizGeo.rotateZ(Math.PI / 2); // axis Y → axis X
+    // Top "lid" panel: thin square inside the top frame, parallel
+    // to the floor.
+    const panelGeo = new THREE.PlaneGeometry(CAGE_W * 0.95, CAGE_W * 0.95);
+    panelGeo.rotateX(-Math.PI / 2); // face downward (visible from below)
+    // Floor glow: same as before.
     const glowGeo = new THREE.CircleGeometry(GLOW_RADIUS, 24);
     glowGeo.rotateX(-Math.PI / 2);
     glowGeo.translate(0, 0.012, 0); // just above the floor stripes
-                                    // to avoid z-fighting
 
-    // ── Shared body material ──────────────────────────────────
-    // One material for every podium body. PBR matte black —
-    // catches very little of the club rig, so the eye is drawn
-    // to the LED edges instead of the box.
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color: 0x080808,
-      metalness: 0.15,
-      roughness: 0.85,
+    // ── Shared plinth material ────────────────────────────────
+    // One material for every plinth. PBR slightly metallic black —
+    // catches a faint sheen from the rig so it doesn't look like a
+    // black hole at the base.
+    const plinthMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a0a,
+      metalness: 0.35,
+      roughness: 0.55,
     });
 
     // ── Build the pool ────────────────────────────────────────
-    // Lay out alternating L/R every SPACING_Z metres along the
-    // 90 m wavelength. Even index → left side; odd → right.
+    const halfW = CAGE_W / 2;
+    const corners: [number, number][] = [
+      [-halfW, -halfW],
+      [ halfW, -halfW],
+      [-halfW,  halfW],
+      [ halfW,  halfW],
+    ];
     const count = Math.floor(POOL_LENGTH / SPACING_Z); // 10 podiums total
     for (let i = 0; i < count; i++) {
       const sideX = (i % 2 === 0) ? -SIDE_X : SIDE_X;
       const z = -i * SPACING_Z;
       const unit = new THREE.Group();
 
-      // Body
-      unit.add(new THREE.Mesh(bodyGeo, bodyMat));
+      // ── Plinth ─────────────────────────────────────────────
+      unit.add(new THREE.Mesh(plinthGeo, plinthMat));
 
-      // 4 corner LED columns. MeshBasicMaterial because these
-      // are PURE LIGHT — they should ignore the scene lighting
-      // entirely and read at their assigned colour regardless
-      // of the club rig sweeping over them.
-      const halfW = PODIUM_W / 2;
-      const halfD = PODIUM_D / 2;
-      const corners: [number, number][] = [
-        [-halfW, -halfD],
-        [ halfW, -halfD],
-        [-halfW,  halfD],
-        [ halfW,  halfD],
-      ];
-      const ledMats: THREE.MeshBasicMaterial[] = [];
+      // ── LED material (shared across all 8 LEDs of THIS podium)
+      // MeshBasicMaterial = unlit. toneMapped:false so pure red
+      // doesn't get desaturated by the renderer's tone mapper.
+      // One material per podium so each podium can pulse on its
+      // own phase (mutated in tickDancerPodiums).
+      const ledMat = new THREE.MeshBasicMaterial({
+        color: LED_COLOR_BASE,
+        toneMapped: false,
+      });
+
+      // ── 4 vertical corner LED tubes (cage frame) ───────────
+      // Each runs from the plinth top up to the cage top.
       for (const [cx, cz] of corners) {
-        // Each podium owns its own LED materials so the pulse can
-        // be modulated per-podium (we mutate material.color each
-        // tick). 4 × 10 = 40 materials — trivial.
-        const ledMat = new THREE.MeshBasicMaterial({
-          color: LED_COLOR_BASE,
-          toneMapped: false, // bypass tone mapping so pure red
-                             // doesn't get desaturated
-        });
-        const led = new THREE.Mesh(ledGeo, ledMat);
-        led.position.set(cx, 0, cz);
+        const led = new THREE.Mesh(ledVertGeo, ledMat);
+        led.position.set(cx, PLINTH_TOP, cz);
         unit.add(led);
-        ledMats.push(ledMat);
       }
 
-      // Floor glow disc — soft red puddle at the podium's base.
-      // Additive blending + transparent so it brightens the floor
-      // beneath rather than painting over it.
+      // ── 4 horizontal top-frame LED rails (the "lid" frame) ─
+      // Two run along the X-axis (front + back of the top
+      // square), two along the Z-axis (left + right of the top
+      // square). ledHorizGeo is pre-rotated to lie along X; the
+      // two Z-axis rails rotate the mesh 90° on Y to repurpose
+      // the shared geometry.
+      // Top front + back (along X)
+      for (const cz of [-halfW, halfW]) {
+        const rail = new THREE.Mesh(ledHorizGeo, ledMat);
+        rail.position.set(0, CAGE_TOP, cz);
+        unit.add(rail);
+      }
+      // Top left + right (along Z) — rotate the X-axis geometry
+      // 90° around Y to point it along Z.
+      for (const cx of [-halfW, halfW]) {
+        const rail = new THREE.Mesh(ledHorizGeo, ledMat);
+        rail.position.set(cx, CAGE_TOP, 0);
+        rail.rotation.y = Math.PI / 2;
+        unit.add(rail);
+      }
+
+      // ── Top "lid" panel ────────────────────────────────────
+      // Thin translucent emissive square just inside the top
+      // frame, faces downward so it reads as a lit ceiling from
+      // the player's angle. Lower opacity than the LED tubes so
+      // the frame is the brightness anchor and the panel is fill.
+      const panelMat = new THREE.MeshBasicMaterial({
+        color: LED_COLOR_BASE,
+        transparent: true,
+        opacity: 0.45,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const panel = new THREE.Mesh(panelGeo, panelMat);
+      // Sit just below the top frame so the rails read as the
+      // edges of a closed lid.
+      panel.position.set(0, CAGE_TOP - LED_RADIUS, 0);
+      unit.add(panel);
+
+      // ── Floor glow disc ────────────────────────────────────
       const glowMat = new THREE.MeshBasicMaterial({
         color: LED_COLOR_BASE,
         transparent: true,
         opacity: 0.35,
         blending: THREE.AdditiveBlending,
-        depthWrite: false,    // don't occlude the floor stripes
+        depthWrite: false,
         toneMapped: false,
       });
       const glow = new THREE.Mesh(glowGeo, glowMat);
@@ -1482,11 +1540,10 @@ export class RunnerGame {
       this.scene.add(unit);
 
       // Phase offset per podium → travelling wave of pulse.
-      // 0.45 rad per index makes the wave readable as it moves
-      // along the line without being too obvious / hypnotic.
       this.dancerPodiums.push({
         group: unit,
-        ledMats,
+        ledMat,
+        panelMat,
         glowMat,
         phase: i * 0.45,
       });
@@ -1500,6 +1557,16 @@ export class RunnerGame {
    * travels along the row. Brightness multiplier is folded in
    * here (same place as `tickClubLights`) so admin brightness
    * tweaks affect podiums too.
+   *
+   * 8 LED tubes per podium (4 vertical corners + 4 horizontal
+   * top rails) share `ledMat`, so we mutate ONE material per
+   * podium and every LED on it updates in lockstep — they're all
+   * part of the same physical fixture, they should breathe
+   * together.
+   *
+   * `panelMat` (the translucent top lid) is modulated separately
+   * via opacity so it brightens with the pulse but never matches
+   * the LED tubes (the frame stays the brightness anchor).
    */
   private tickDancerPodiums(t: number) {
     const brightness = this.brightnessMultiplier;
@@ -1511,12 +1578,16 @@ export class RunnerGame {
       // so the brightness multiplier can dim but not super-bright
       // (avoids white-clipping the red).
       const v = Math.min(1, pulse * brightness);
-      for (const m of p.ledMats) {
-        m.color.setRGB(v, v * 0.02, v * 0.18); // (1, ~0, ~0.18) at full = saturated TAPE red
-      }
+      // All 8 LED tubes on this podium share one material — single
+      // mutation updates verticals + top rails together.
+      p.ledMat.color.setRGB(v, v * 0.02, v * 0.18); // saturated TAPE red
+      // Top lid panel: opacity tracks the pulse but stays in a
+      // narrower band (0.30 – 0.55) — the frame should always
+      // out-glow the fill.
+      p.panelMat.opacity = 0.30 + 0.25 * pulse;
       // Floor glow tracks the LED pulse but at lower opacity so
       // it doesn't dominate.
-      p.glowMat.opacity = 0.2 + 0.25 * pulse;
+      p.glowMat.opacity = 0.20 + 0.25 * pulse;
     }
   }
 
