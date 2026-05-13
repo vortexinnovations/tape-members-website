@@ -135,6 +135,28 @@ export class RunnerGame {
    */
   private playerMixer?: THREE.AnimationMixer;
   private playerRunAction?: THREE.AnimationAction;
+  /**
+   * Standalone Jump AnimationClip, lazy-loaded from
+   * `/models/runner_jump.glb` in parallel with the player.
+   *
+   * The GLB is stripped (mesh + materials + textures removed via
+   * `strip_to_animation.mjs`), leaving only the bone hierarchy +
+   * the 1.03-second jump clip — 148 KB on disk vs the original
+   * 58 MB. The dummy hierarchy in the GLB is discarded at load
+   * time; we keep only the clip, retarget its track-name prefix
+   * to match the loaded player's skeleton (`mixamorig7:` for
+   * male, `mixamorig:` for female), then bind it to the same
+   * mixer as the run action.
+   */
+  private playerJumpClip?: THREE.AnimationClip;
+  private playerJumpAction?: THREE.AnimationAction;
+  /**
+   * Edge detector — true on the frame after takeoff, until the
+   * frame the player lands. Used to fire the run↔jump crossfade
+   * exactly once per landing instead of every frame the player
+   * is airborne.
+   */
+  private wasInAir = false;
   /** True while we're showing the capsule fallback. Flips false
    *  once a GLB load completes successfully. */
   private isPlaceholderPlayer = true;
@@ -479,6 +501,56 @@ export class RunnerGame {
     // bouncers that spawn before it lands use the procedural
     // humanoid fallback automatically.
     this.loadBouncerModel();
+    // Same pattern for the jump animation clip — typically arrives
+    // before the player's first jump. If the player's still on the
+    // capsule placeholder when this resolves, the clip is cached
+    // and `setupJumpAction` runs from `tryLoadGltfPlayer` later.
+    // If the player's already loaded by then, this immediately
+    // attaches the action to the existing mixer.
+    this.loadJumpClip();
+  }
+
+  /**
+   * Load the standalone Jump animation clip. The GLB at
+   * `/models/runner_jump.glb` has been stripped of its mesh,
+   * materials, and textures (see `strip_to_animation.mjs`) — only
+   * the bone hierarchy + the 1.033-second jump clip remain.
+   *
+   * We extract `animations[0]`, throw away the rest of the loaded
+   * scene (mesh stripped already; the dummy bone tree in the GLB
+   * isn't needed because the AnimationMixer binds tracks against
+   * the PLAYER's existing skeleton — same Mixamo bone naming, so
+   * with one prefix swap the same clip drives any character).
+   *
+   * Failure is silently swallowed — `setupJumpAction` becomes a
+   * no-op and the player keeps the legacy behaviour (running-pose
+   * frozen mid-air during a jump).
+   */
+  private async loadJumpClip() {
+    try {
+      const gltf = await new GLTFLoader().loadAsync('/models/runner_jump.glb');
+      const raw = gltf.animations[0];
+      if (!raw) {
+        // eslint-disable-next-line no-console
+        console.debug('[runner] jump glb has no animations');
+        return;
+      }
+      // Strip ALL root-bone translation (X+Y+Z) so the clip is pure
+      // pose change. Mixamo's Jump clip translates the Hips up + down
+      // ~1m during the leap; our collider already moves up via
+      // `playerY`. Without stripping, the two stack and the player
+      // flies ~twice as high as intended.
+      this.playerJumpClip = this.stripAllRootMotion(raw);
+      // If the player loaded first, attach the jump action retro-
+      // actively. (No-op if not — `tryLoadGltfPlayer` calls
+      // `setupJumpAction` itself once the mixer exists.)
+      if (this.playerMixer && this.playerVisual) {
+        this.setupJumpAction();
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.debug('[runner] jump clip load failed', e);
+    }
   }
 
   /**
@@ -790,6 +862,13 @@ export class RunnerGame {
       this.playerMixer.uncacheRoot(this.playerMixer.getRoot());
       this.playerMixer = undefined;
       this.playerRunAction = undefined;
+      // Action is mixer-owned — clearing the field is enough, the
+      // mixer's stopAllAction + uncacheRoot above already detach
+      // it. The CLIP (`playerJumpClip`) is intentionally NOT cleared
+      // here because it survives gender swaps: it's the raw clip
+      // data, prefix-agnostic until setupJumpAction retargets a
+      // fresh copy on each character load.
+      this.playerJumpAction = undefined;
     }
     if (this.playerVisual) {
       this.playerVisual.removeFromParent();
@@ -974,6 +1053,11 @@ export class RunnerGame {
       this.playerRunAction = this.playerMixer.clipAction(runClip);
       this.playerRunAction.setLoop(THREE.LoopRepeat, Infinity);
       this.playerRunAction.play();
+      // If the jump clip already arrived (its load fires in
+      // parallel with this one from the constructor), wire it as
+      // a second action on the same mixer now. If it hasn't,
+      // `loadJumpClip` will call back into setupJumpAction itself.
+      this.setupJumpAction();
     }
   }
 
@@ -1032,6 +1116,135 @@ export class RunnerGame {
       clip.duration,
       newTracks,
     );
+  }
+
+  /**
+   * Sibling of `stripRootForwardMotion` that zeros Y too. Used on
+   * the jump clip because the collider already arcs vertically via
+   * `playerY` — leaving the clip's hip-Y intact would compound the
+   * two and the character would visibly fly twice as high.
+   */
+  private stripAllRootMotion(
+    clip: THREE.AnimationClip,
+  ): THREE.AnimationClip {
+    const isRootPositionTrack = (name: string): boolean => {
+      if (!name.endsWith('.position')) return false;
+      const bone = name.split('.')[0].toLowerCase();
+      return bone.includes('hip') || bone === 'root' || bone.endsWith('|root');
+    };
+    const newTracks = clip.tracks.map((t) => {
+      if (!isRootPositionTrack(t.name)) return t;
+      const values = new Float32Array(t.values);
+      for (let i = 0; i < values.length; i += 3) {
+        values[i] = 0;
+        values[i + 1] = 0;
+        values[i + 2] = 0;
+      }
+      return new THREE.VectorKeyframeTrack(
+        t.name,
+        Array.from(t.times),
+        Array.from(values),
+      );
+    });
+    return new THREE.AnimationClip(
+      clip.name + '_static',
+      clip.duration,
+      newTracks,
+    );
+  }
+
+  /**
+   * Walk the player model, find the Hips bone, and return its
+   * prefix (e.g. `mixamorig:`, `mixamorig7:`, `Armature|`). Used
+   * to retarget the Jump clip's track names so the AnimationMixer's
+   * PropertyBinding can find each track's target bone in the
+   * player's skeleton.
+   *
+   * Returns an empty string if no Hips bone is found — caller
+   * should bail rather than retarget against a wrong/missing
+   * prefix. Defaults to `mixamorig:` if asked, but we hard-fail
+   * so a silent prefix mismatch can't accidentally hide.
+   */
+  private detectPlayerBonePrefix(model: THREE.Object3D): string {
+    let prefix = '';
+    model.traverse((obj) => {
+      if (prefix) return; // first match wins
+      if (obj instanceof THREE.Bone && /hips$/i.test(obj.name)) {
+        prefix = obj.name.replace(/Hips$/i, '');
+      }
+    });
+    return prefix;
+  }
+
+  /**
+   * Return a copy of `clip` with every track name's prefix
+   * rewritten from `fromPrefix` → `toPrefix`. Used to bind a
+   * Jump clip exported with one Mixamo prefix (`mixamorig7:`) to
+   * a player rig that uses a different one (`mixamorig:`).
+   *
+   * Tracks without the source prefix are passed through
+   * unchanged. The clip is cloned defensively so the cached
+   * `playerJumpClip` field isn't mutated for the next character.
+   */
+  private retargetClipPrefix(
+    clip: THREE.AnimationClip,
+    fromPrefix: string,
+    toPrefix: string,
+  ): THREE.AnimationClip {
+    if (fromPrefix === toPrefix) return clip;
+    const newClip = clip.clone();
+    for (const track of newClip.tracks) {
+      if (track.name.startsWith(fromPrefix)) {
+        track.name = toPrefix + track.name.slice(fromPrefix.length);
+      }
+    }
+    return newClip;
+  }
+
+  /**
+   * Attach the cached jump clip as a second action on the player's
+   * existing AnimationMixer. Safe to call multiple times — bails
+   * cleanly if the action already exists.
+   *
+   * Called from BOTH `loadJumpClip` (if the player was already
+   * loaded when the clip arrives) and `tryLoadGltfPlayer` (after
+   * the mixer is created, if the clip was already cached). One of
+   * those two paths fires; the other is a no-op.
+   *
+   * Both actions stay in the "playing" state so `crossFadeTo` can
+   * lerp between them without re-priming. The jump action sits at
+   * effectiveWeight=0 until `jump()` triggers the takeoff fade.
+   */
+  private setupJumpAction() {
+    if (this.playerJumpAction) return; // already wired
+    if (!this.playerJumpClip || !this.playerMixer || !this.playerVisual) return;
+
+    const playerPrefix = this.detectPlayerBonePrefix(this.playerVisual);
+    if (!playerPrefix) {
+      // eslint-disable-next-line no-console
+      console.debug(
+        '[runner] no Hips bone found on player — cannot bind jump clip',
+      );
+      return;
+    }
+    // The stripped Jump GLB encodes `mixamorig7:` (the prefix
+    // Mixamo gave the original character export). For male
+    // (mixamorig7:) the prefix matches; for female (mixamorig:)
+    // we rename every track.
+    const retargeted = this.retargetClipPrefix(
+      this.playerJumpClip,
+      'mixamorig7:',
+      playerPrefix,
+    );
+
+    const action = this.playerMixer.clipAction(retargeted);
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true; // hold last frame after the leap
+    // Pre-roll: action starts in the "playing" pool with weight 0
+    // so crossFadeTo can lerp it up without a re-prime.
+    action.play();
+    action.setEffectiveWeight(0);
+    this.playerJumpAction = action;
   }
 
   // ── Input ───────────────────────────────────────────────────────
@@ -1127,6 +1340,43 @@ export class RunnerGame {
     this.startGameIfNotStarted();
     if (this.playerY > PLAYER.BASE_Y + 0.05) return; // already airborne
     this.playerVy = this.jumpVelocity;
+    this.triggerJumpAnimation();
+  }
+
+  /**
+   * Crossfade the player's mixer from the run action into the jump
+   * action. No-op if either action is missing (GLB still loading or
+   * load failed) — `playerLimbs` fallback for the capsule covers
+   * that case, and a Mixamo player without the jump clip just
+   * keeps running in mid-air (the legacy behaviour).
+   *
+   * `timeScale` is tuned per-jump so the 1.033s jump clip fits the
+   * predicted airtime exactly. Airtime depends on `jumpVelocity`
+   * and `PLAYER.GRAVITY`; both are constants per-jump (jumpVelocity
+   * is admin-tunable but doesn't change mid-run). With defaults
+   * (vy=8, g=-25) airtime ≈ 0.64s → timeScale ≈ 1.6 → the leap
+   * frames sync with the actual arc.
+   */
+  private triggerJumpAnimation() {
+    const jumpAction = this.playerJumpAction;
+    const runAction = this.playerRunAction;
+    if (!jumpAction || !runAction || !this.playerJumpClip) return;
+
+    const airtime = (2 * this.jumpVelocity) / Math.abs(PLAYER.GRAVITY);
+    // Floor airtime defensively — if an admin set jumpVelocity to
+    // 0.0001 we don't want timeScale → infinity.
+    const safeAirtime = Math.max(0.2, airtime);
+    jumpAction.timeScale = this.playerJumpClip.duration / safeAirtime;
+
+    // Restart the clip from frame 0 every jump so the takeoff
+    // pose is in sync with the moment the collider leaves the
+    // ground. crossFadeTo handles the weight lerp.
+    jumpAction.reset();
+    jumpAction.setLoop(THREE.LoopOnce, 1);
+    jumpAction.clampWhenFinished = true;
+    // 0.10s fade-in — fast enough that the takeoff feels reactive,
+    // slow enough to avoid a hard pop on the running pose.
+    runAction.crossFadeTo(jumpAction, 0.10, false);
   }
 
   /**
@@ -1232,6 +1482,23 @@ export class RunnerGame {
       this.player.position.y = this.playerY;
     }
     const grounded = this.playerY <= PLAYER.BASE_Y + 0.01;
+    // Landing edge — fires once on the frame the player touches
+    // down. Crossfade jump → run so the mid-jump pose blends
+    // smoothly back into the run cycle. Both actions stay in the
+    // playing pool from `setupJumpAction`, so this is a pure
+    // weight lerp — no re-prime needed.
+    if (grounded && this.wasInAir) {
+      this.wasInAir = false;
+      const jumpAction = this.playerJumpAction;
+      const runAction = this.playerRunAction;
+      if (jumpAction && runAction) {
+        // Run cycle has been looping behind weight 0 throughout
+        // the jump — no reset() needed. crossFadeTo lerps the
+        // weights over 0.10s.
+        jumpAction.crossFadeTo(runAction, 0.10, false);
+      }
+    }
+    if (!grounded) this.wasInAir = true;
     if (grounded) {
       const bobPhase = this.duration * (this.speed / this.startSpeed) * 8;
       this.player.position.y =
