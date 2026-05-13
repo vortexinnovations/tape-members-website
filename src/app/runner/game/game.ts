@@ -190,6 +190,15 @@ export class RunnerGame {
 
   // World
   private floorStripes: THREE.Mesh[] = [];
+  /**
+   * Velvet-rope stanchion pool. Each entry is a Group containing
+   * a gold post + base + cap + a red rope tube that visually
+   * spans 5 m back to where the NEXT stanchion will be. Two rows
+   * (left + right of the runway) interleaved in this array, all
+   * scrolled + recycled in the same update-loop pass as the
+   * floor stripes.
+   */
+  private velvetRopes: THREE.Group[] = [];
   private pickups: ActivePickup[] = [];
   private obstacles: ActiveObstacle[] = [];
   private spawnAccumPickup = 0;
@@ -496,6 +505,18 @@ export class RunnerGame {
       this.scene.add(s);
       this.floorStripes.push(s);
     }
+
+    // ── Velvet rope barrier ────────────────────────────────────
+    // Nightclub-style gold stanchions + red velvet rope along
+    // both sides of the runway. Stanchions sit at X = ±3.75 —
+    // just outside the 7.2 m white-stripe band, well clear of
+    // the outermost lane (X = ±2.4) so they never interfere
+    // with obstacle / pickup collisions. Each stanchion "owns"
+    // the rope segment extending 5 m behind it (into the
+    // distance), matching the floor-stripe rhythm. Whole pool
+    // scrolls like the stripes and recycles when units pass
+    // the camera.
+    this.buildVelvetRopes();
 
     // ── Player ──────────────────────────────────────────────────
     // Invisible collider sized to the original PLAYER.* dimensions
@@ -957,6 +978,97 @@ export class RunnerGame {
    * subsequent calls (e.g. init() arriving with a gender) don't
    * leak GPU memory.
    */
+  /**
+   * Build the velvet-rope nightclub barrier on both sides of the
+   * runway. One Group per stanchion holding shared geometries +
+   * shared materials (so the 36-instance pool is just ~4 geom +
+   * 2 mat in GPU memory; the 36 meshes are cheap instances on
+   * top).
+   *
+   * Each unit's rope tube extends 5 m BEHIND its post — so as
+   * the chain scrolls forward, the rope from this stanchion
+   * visually meets the next stanchion's post. The whole pool
+   * is interleaved (L0, R0, L1, R1, ...) in `velvetRopes` so
+   * one update-loop pass scrolls both rows together.
+   */
+  private buildVelvetRopes() {
+    const POST_HEIGHT = 1.0;
+    const POST_RADIUS = 0.04;
+    const BASE_RADIUS = 0.15;
+    const BASE_HEIGHT = 0.03;
+    const CAP_RADIUS = 0.06;
+    const ROPE_SPAN = 5.0; // matches floor-stripe spacing
+    const ROPE_SAG = 0.15; // catenary dip at the midpoint
+    const ROPE_RADIUS = 0.025;
+    const SIDE_X = 3.75; // just outside the 7.2 m white-stripe band
+    const ROPE_UNITS = 18; // mirrors floorStripes count
+
+    // ── Shared geometries ─────────────────────────────────────
+    // Post — slim cylinder. Translate so y=0 is its base instead
+    // of its midpoint (Three.js cylinders are origin-centred).
+    const postGeo = new THREE.CylinderGeometry(
+      POST_RADIUS,
+      POST_RADIUS,
+      POST_HEIGHT,
+      12,
+    );
+    postGeo.translate(0, POST_HEIGHT / 2, 0);
+    // Base — flat disc, slightly wider at the bottom for stability
+    // (real stanchions have a beveled cast base).
+    const baseGeo = new THREE.CylinderGeometry(
+      BASE_RADIUS,
+      BASE_RADIUS * 1.1,
+      BASE_HEIGHT,
+      24,
+    );
+    baseGeo.translate(0, BASE_HEIGHT / 2, 0);
+    // Cap — round finial where the rope attaches.
+    const capGeo = new THREE.SphereGeometry(CAP_RADIUS, 16, 8);
+    capGeo.translate(0, POST_HEIGHT + CAP_RADIUS * 0.3, 0);
+    // Rope — a quadratic Bezier from this post's cap to where
+    // the next post's cap will sit, with the control point
+    // dropped ROPE_SAG below the line to produce a catenary-ish
+    // sag. Local space (rope is a child of the unit Group).
+    const ropeCurve = new THREE.QuadraticBezierCurve3(
+      new THREE.Vector3(0, POST_HEIGHT, 0),
+      new THREE.Vector3(0, POST_HEIGHT - ROPE_SAG, -ROPE_SPAN / 2),
+      new THREE.Vector3(0, POST_HEIGHT, -ROPE_SPAN),
+    );
+    const ropeGeo = new THREE.TubeGeometry(
+      ropeCurve,
+      16, // path segments — smooth-looking curve
+      ROPE_RADIUS,
+      6, // radial segments — 6 is enough for a thin tube
+      false,
+    );
+
+    // ── Shared materials ──────────────────────────────────────
+    const goldMat = new THREE.MeshStandardMaterial({
+      color: 0xd4af37, // brass gold
+      metalness: 0.85,
+      roughness: 0.35,
+    });
+    const ropeMat = new THREE.MeshStandardMaterial({
+      color: 0x8b0a0a, // deep velvet red
+      metalness: 0.0,
+      roughness: 0.85,
+    });
+
+    // ── Build the pool ────────────────────────────────────────
+    for (let i = 0; i < ROPE_UNITS; i++) {
+      for (const sideX of [-SIDE_X, SIDE_X]) {
+        const unit = new THREE.Group();
+        unit.add(new THREE.Mesh(baseGeo, goldMat));
+        unit.add(new THREE.Mesh(postGeo, goldMat));
+        unit.add(new THREE.Mesh(capGeo, goldMat));
+        unit.add(new THREE.Mesh(ropeGeo, ropeMat));
+        unit.position.set(sideX, 0, -i * 5);
+        this.scene.add(unit);
+        this.velvetRopes.push(unit);
+      }
+    }
+  }
+
   private buildPlayerVisualPlaceholder(gender: string) {
     // ── Dispose any existing visual ───────────────────────────
     this.disposePlayerVisualResources();
@@ -1758,6 +1870,11 @@ export class RunnerGame {
     for (const s of this.floorStripes) {
       s.position.z += scroll;
       if (s.position.z > 4) s.position.z -= 90;
+    }
+    // ── Scroll velvet-rope stanchions (same rhythm as stripes)
+    for (const u of this.velvetRopes) {
+      u.position.z += scroll;
+      if (u.position.z > 4) u.position.z -= 90;
     }
 
     // ── Animate club lights ───────────────────────────────────
