@@ -1257,37 +1257,78 @@ export class RunnerGame {
     );
 
     // Now actually create the actions + verify each one bound.
-    // PropertyBinding.create looks up the target node when the
-    // binding is first realized (during update or play). We force
-    // a one-tick update at weight 1 to make the bindings resolve,
-    // then snapshot the result, then drop weight back to 0.
+    // Probe multiple bones per mesh — Hips alone doesn't tell us
+    // anything for meshes whose skeleton doesn't include Hips
+    // (e.g. the body, whose skeleton roots at Spine2). For each
+    // mesh, find the first bone in its skeleton AND probe a few
+    // expected names. If any of them changes from identity after
+    // a forced mixer tick at weight=1, the binding is working
+    // for that mesh.
+    const fmt = (v: number) => v.toFixed(3);
+    const probeBone = (b: THREE.Bone | undefined): string => {
+      if (!b) return 'null';
+      return (
+        `${b.name} pos=(${fmt(b.position.x)},${fmt(b.position.y)},` +
+        `${fmt(b.position.z)}) quat=(${fmt(b.quaternion.x)},` +
+        `${fmt(b.quaternion.y)},${fmt(b.quaternion.z)},` +
+        `${fmt(b.quaternion.w)})`
+      );
+    };
     for (let i = 0; i < skinnedMeshes.length; i++) {
       const mesh = skinnedMeshes[i];
       const action = this.playerMixer.clipAction(this.playerJumpClip, mesh);
       action.setLoop(THREE.LoopOnce, 1);
       action.clampWhenFinished = true;
       action.play();
-      // Briefly crank to weight=1 + tick the mixer so the lazy
-      // PropertyBinding resolution happens. Then we inspect the
-      // bindings to see which targets actually resolved.
+      // Crank to weight=1 + tick so the lazy PropertyBinding
+      // resolution + the first frame's value both apply.
       action.setEffectiveWeight(1);
       this.playerMixer.update(0);
-      // The mixer caches bindings in an internal `_bindings` map
-      // (Three.js private API). Probe via the public Object3D
-      // tree instead: pick a bone we expect to be moving (Hips)
-      // and read its current rotation/position. If it differs
-      // from the bind pose, the binding worked.
-      const hipBone = mesh.skeleton?.getBoneByName('mixamorig7Hips');
-      const probeMsg = hipBone
-        ? `hipBone after tick: pos=(${hipBone.position.x.toFixed(3)},` +
-          `${hipBone.position.y.toFixed(3)},${hipBone.position.z.toFixed(3)}) ` +
-          `quat=(${hipBone.quaternion.x.toFixed(3)},${hipBone.quaternion.y.toFixed(3)},` +
-          `${hipBone.quaternion.z.toFixed(3)},${hipBone.quaternion.w.toFixed(3)})`
-        : 'no Hips bone in skeleton';
-      console.log(`[runner/jump-debug] sm[${i}] ${probeMsg}`);
+
+      const skel = mesh.skeleton;
+      // First bone in skeleton.bones (top of the skeleton's tree).
+      const firstBone = skel?.bones[0];
+      // Probe Spine2 (body's root), LeftShoulder + LeftHand (arms
+      // should clearly animate during a jump).
+      const spine2 = skel?.getBoneByName('mixamorig7Spine2');
+      const lshoulder = skel?.getBoneByName('mixamorig7LeftShoulder');
+      const lhand = skel?.getBoneByName('mixamorig7LeftHand');
+      console.log(
+        `[runner/jump-debug] sm[${i}=${mesh.name}] after-tick probes:\n` +
+          `  first(${firstBone?.name || '?'}): ${probeBone(firstBone)}\n` +
+          `  Spine2: ${probeBone(spine2)}\n` +
+          `  LeftShoulder: ${probeBone(lshoulder)}\n` +
+          `  LeftHand: ${probeBone(lhand)}`,
+      );
 
       action.setEffectiveWeight(0);
       this.playerJumpActions.push(action);
+    }
+
+    // Body-specific: dump its full bone-name list so we know the
+    // shape of its skeleton, AND its parent in the scene graph
+    // (sometimes FBXLoader parents a body skeleton oddly).
+    const bodyMesh = skinnedMeshes.find((m) => /body/i.test(m.name));
+    if (bodyMesh && bodyMesh.skeleton) {
+      console.log(
+        `[runner/jump-debug] body skeleton ALL bones (${bodyMesh.skeleton.bones.length}):`,
+        bodyMesh.skeleton.bones.map((b) => b.name),
+      );
+      const parent = bodyMesh.parent;
+      console.log(
+        `[runner/jump-debug] body mesh parent: ` +
+          `name="${parent?.name}" type=${parent?.type} ` +
+          `children=${parent?.children.length}`,
+      );
+      // The skeleton's bones[0].parent tells us where the skeleton
+      // is rooted in the scene graph — if it's an unusual node,
+      // animation might not propagate as expected.
+      const rootBoneParent = bodyMesh.skeleton.bones[0]?.parent;
+      console.log(
+        `[runner/jump-debug] body skeleton bones[0].parent: ` +
+          `name="${rootBoneParent?.name || '?'}" ` +
+          `type=${rootBoneParent?.type || '?'}`,
+      );
     }
     // Also pipe one summary line through the Flutter bridge so the
     // user can grab it from the app without dev-tools.
