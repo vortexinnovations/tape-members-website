@@ -171,7 +171,7 @@ export interface ObstacleSpec {
    */
   airOnly: boolean;
   // Reason sent back to Flutter for the game-over panel headline.
-  failReason: 'speakerHit' | 'bouncerHit';
+  failReason: 'speakerHit' | 'bouncerHit' | 'discoBallHit';
 }
 
 export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
@@ -210,12 +210,44 @@ export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
     // while grounded.
     baseY: 3.4,
     airOnly: true,
-    // Reused — Flutter maps both speakerHit and bouncerHit (and
-    // implicitly discoBall) to GameOverReason.speakerHit today.
-    // Unique copy for disco-ball death is a polish item later.
-    failReason: 'speakerHit',
+    failReason: 'discoBallHit',
   },
 };
+
+/**
+ * Default copy shown on the Flutter game-over panel, keyed on the
+ * reason the run ended. Each pair is overridable via
+ * `InitPayload.settings.gameOver<Reason><Headline|Subtitle>` (admin
+ * tunable from /runnerAdmin). game.ts resolves the final pair and
+ * ships them inside the `gameOver` message so changing copy NEVER
+ * requires an app update.
+ */
+export const DEATH_COPY = {
+  blackout: {
+    headline: 'TOO TIPSY',
+    subtitle: 'You blacked out.',
+  },
+  speakerHit: {
+    headline: 'OOF',
+    subtitle: 'You ran into a speaker.',
+  },
+  bouncerHit: {
+    headline: 'WRONG MOVE',
+    subtitle: 'You crashed the dance floor.',
+  },
+  discoBallHit: {
+    headline: 'GLITTER BOMB',
+    subtitle: 'You smacked into a disco ball.',
+  },
+  manual: {
+    // The "force-end" path used only in dev / spike testing. Reusing
+    // blackout copy so a stray manual exit doesn't ship surprising
+    // copy to a real player. Admin can override individually if
+    // they care.
+    headline: 'TOO TIPSY',
+    subtitle: 'You blacked out.',
+  },
+} as const;
 
 const OBSTACLE_TOTAL_WEIGHT = Object.values(OBSTACLES).reduce(
   (sum, o) => sum + o.weight,

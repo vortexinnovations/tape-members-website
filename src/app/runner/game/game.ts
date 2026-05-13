@@ -37,6 +37,7 @@ import { Buzz } from './buzz';
 import { HUD } from './hud';
 import {
   COMBO,
+  DEATH_COPY,
   LANES,
   OBSTACLES,
   PICKUPS,
@@ -214,6 +215,17 @@ export class RunnerGame {
   private pickupWeightOverrides: Partial<Record<PickupKind, number>> = {};
   private pickupScoreOverrides: Partial<Record<PickupKind, number>> = {};
   private obstacleWeightOverrides: Partial<Record<ObstacleKind, number>> = {};
+  /**
+   * Game-over copy overrides keyed on the death reason. Populated
+   * from `InitPayload.settings.gameOver<Reason><Headline|Subtitle>`
+   * in init(). When a key is missing the resolver in `resolveDeath
+   * Copy()` falls back to DEATH_COPY[reason] from tuning.ts.
+   * Lets admins change "You ran into a speaker." → "You hit the wall
+   * of sound." from /runnerAdmin without an app rebuild.
+   */
+  private deathCopyOverrides: Partial<
+    Record<keyof typeof DEATH_COPY, { headline?: string; subtitle?: string }>
+  > = {};
 
   private running = true;
   private gameOver = false;
@@ -2646,6 +2658,42 @@ export class RunnerGame {
           this.obstacleWeightOverrides[kind] = Math.max(0, v);
         }
       }
+
+      // ── Game-over copy overrides ────────────────────────────
+      // Each pair (headline + subtitle) is independently optional.
+      // Empty strings are treated as "not set" so an admin can clear
+      // a previously-saved override by saving '' without losing the
+      // built-in fallback.
+      const deathCopyKeys: Array<
+        [keyof typeof DEATH_COPY, keyof typeof s, keyof typeof s]
+      > = [
+        ['blackout', 'gameOverBlackoutHeadline', 'gameOverBlackoutSubtitle'],
+        ['speakerHit', 'gameOverSpeakerHeadline', 'gameOverSpeakerSubtitle'],
+        ['bouncerHit', 'gameOverBouncerHeadline', 'gameOverBouncerSubtitle'],
+        [
+          'discoBallHit',
+          'gameOverDiscoBallHeadline',
+          'gameOverDiscoBallSubtitle',
+        ],
+      ];
+      for (const [reason, headKey, subKey] of deathCopyKeys) {
+        const headRaw = s[headKey];
+        const subRaw = s[subKey];
+        const head =
+          typeof headRaw === 'string' && headRaw.trim().length > 0
+            ? headRaw
+            : undefined;
+        const sub =
+          typeof subRaw === 'string' && subRaw.trim().length > 0
+            ? subRaw
+            : undefined;
+        if (head || sub) {
+          this.deathCopyOverrides[reason] = {
+            headline: head,
+            subtitle: sub,
+          };
+        }
+      }
     }
     postToFlutter({
       type: 'log',
@@ -2678,6 +2726,7 @@ export class RunnerGame {
     this.running = false;
     // Drop the buzz blur overlay so the game-over panel renders crisp.
     this.hud.setBlur(0);
+    const copy = this.resolveDeathCopy(reason);
     postToFlutter({
       type: 'gameOver',
       score: Math.floor(this.score),
@@ -2689,7 +2738,27 @@ export class RunnerGame {
       peakBuzz: this.buzz.getPeak(),
       speed: this.speed,
       reason,
+      headline: copy.headline,
+      subtitle: copy.subtitle,
     });
+  }
+
+  /**
+   * Pick the headline+subtitle pair to ship to Flutter for the given
+   * death reason. Admin override (set via init.settings) wins; else
+   * the built-in DEATH_COPY default; else (theoretically impossible
+   * given the union type, but kept defensive) the blackout default.
+   */
+  private resolveDeathCopy(reason: GameOverMessage['reason']): {
+    headline: string;
+    subtitle: string;
+  } {
+    const fallback = DEATH_COPY[reason] ?? DEATH_COPY.blackout;
+    const override = this.deathCopyOverrides[reason];
+    return {
+      headline: override?.headline ?? fallback.headline,
+      subtitle: override?.subtitle ?? fallback.subtitle,
+    };
   }
 
   /** Called by page.tsx on unmount. */

@@ -68,6 +68,20 @@ export type InitPayload = {
     speakerWeight?: number;
     bouncerWeight?: number;
     discoBallWeight?: number;
+    // ── Game-over copy overrides (Three.js only) ────────────────
+    // Each pair (headline + subtitle) overrides the built-in
+    // DEATH_COPY default for that death reason. The web sends the
+    // resolved strings inside `gameOver` so Flutter can render them
+    // without an app update. Setting either to '' falls back to the
+    // hard-coded default in tuning.ts.
+    gameOverBlackoutHeadline?: string;
+    gameOverBlackoutSubtitle?: string;
+    gameOverSpeakerHeadline?: string;
+    gameOverSpeakerSubtitle?: string;
+    gameOverBouncerHeadline?: string;
+    gameOverBouncerSubtitle?: string;
+    gameOverDiscoBallHeadline?: string;
+    gameOverDiscoBallSubtitle?: string;
   };
 };
 
@@ -107,7 +121,21 @@ export type GameOverMessage = {
   /** Speed at the moment of game-over (m/s). */
   speed: number;
   /** Why the run ended. */
-  reason: 'blackout' | 'speakerHit' | 'bouncerHit' | 'manual';
+  reason:
+    | 'blackout'
+    | 'speakerHit'
+    | 'bouncerHit'
+    | 'discoBallHit'
+    | 'manual';
+  /**
+   * Resolved game-over panel headline for this `reason`. Either the
+   * admin-tunable override or the built-in default from
+   * tuning.ts → DEATH_COPY. Flutter falls back to its hardcoded copy
+   * when this is missing (old web build / parsing failure).
+   */
+  headline?: string;
+  /** Resolved subtitle, same source. */
+  subtitle?: string;
 };
 
 /** Sent from JS to Flutter for debug logging via the bridge. */
