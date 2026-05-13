@@ -21,7 +21,12 @@ export class HUD {
   private root: HTMLDivElement;
   private scoreEl: HTMLDivElement;
   private distEl: HTMLDivElement;
+  /** Outer wrapper for the combo readout — owns the opacity +
+   *  scale transition. Contains two child rows: the big multiplier
+   *  pill and the small "N in a row" caption. */
   private comboEl: HTMLDivElement;
+  private comboMultEl: HTMLDivElement;
+  private comboCountEl: HTMLDivElement;
   /** Container for the buzz-meter cells. Stored so `setBuzzMaxLevel`
    *  can wipe and rebuild the cells when the admin reconfigures
    *  the max level. */
@@ -193,33 +198,71 @@ export class HUD {
     // the buzz meter and combo chip both live at the bottom now,
     // so the top row is purely the centred score column.)
 
-    // Combo chip — absolutely positioned below the character so
+    // Combo readout — absolutely positioned below the character so
     // it's right in the player's field of view during gameplay,
     // not tucked away in the corner. Hidden until combo >= 2.
     // Sits BELOW the buzz bar so the multiplier text stays close
     // to the bottom edge.
+    //
+    // Two-row layout:
+    //   ┌───────┐
+    //   │  ×1.5 │  ← big bold gold multiplier
+    //   │ 4 in a row │  ← small caption underneath
+    //   └───────┘
+    //
+    // Earlier inline form "×1.5 ·4" was confusing because the
+    // interpunct read as multiplication ("1.5 × 4 = 6").
     this.comboEl = document.createElement('div');
     Object.assign(this.comboEl.style, {
       position: 'absolute',
       left: '50%',
-      // Combo chip sits ~80 px above the safe-area inset. Buzz bar
-      // floats ~45 px above this.
+      // Combo readout sits ~80 px above the safe-area inset. Buzz
+      // bar floats ~45 px above this.
       bottom: 'calc(env(safe-area-inset-bottom, 0px) + 80px)',
       transform: 'translateX(-50%) scale(0.85)',
       transformOrigin: 'center center',
-      fontSize: '30px',
-      fontWeight: '900',
-      letterSpacing: '0.5px',
-      fontVariantNumeric: 'tabular-nums',
-      color: '#ffd45a',
-      textShadow:
-        '0 0 18px rgba(255, 212, 90, 0.65), 0 2px 8px rgba(0, 0, 0, 0.85)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: '2px',
       opacity: '0',
       transition: 'opacity 0.2s ease, transform 0.25s ease',
       whiteSpace: 'nowrap',
       zIndex: '4',
     } satisfies Partial<CSSStyleDeclaration>);
-    this.comboEl.textContent = '';
+
+    // Big multiplier — the most important info, so it gets the
+    // full visual weight: 30 px Outfit-900 gold with a glow.
+    this.comboMultEl = document.createElement('div');
+    Object.assign(this.comboMultEl.style, {
+      fontSize: '30px',
+      fontWeight: '900',
+      letterSpacing: '0.5px',
+      fontVariantNumeric: 'tabular-nums',
+      lineHeight: '1',
+      color: '#ffd45a',
+      textShadow:
+        '0 0 18px rgba(255, 212, 90, 0.65), 0 2px 8px rgba(0, 0, 0, 0.85)',
+    } satisfies Partial<CSSStyleDeclaration>);
+    this.comboMultEl.textContent = '';
+    this.comboEl.appendChild(this.comboMultEl);
+
+    // Caption — small, faint, all-caps. Tells the player how many
+    // bottles are in the current chain. Slight letterSpacing for
+    // legibility at this size.
+    this.comboCountEl = document.createElement('div');
+    Object.assign(this.comboCountEl.style, {
+      fontSize: '11px',
+      fontWeight: '700',
+      letterSpacing: '1.5px',
+      textTransform: 'uppercase',
+      fontVariantNumeric: 'tabular-nums',
+      color: 'rgba(255, 255, 255, 0.7)',
+      textShadow: '0 1px 4px rgba(0, 0, 0, 0.7)',
+    } satisfies Partial<CSSStyleDeclaration>);
+    this.comboCountEl.textContent = '';
+    this.comboEl.appendChild(this.comboCountEl);
+
     this.root.appendChild(this.comboEl);
 
     // ── Full-screen vignette ─────────────────────────────────────
@@ -501,12 +544,27 @@ export class HUD {
   }
 
   setCombo(combo: number, multiplier: number) {
-    if (combo < 2) {
+    // Hide until there's an active multiplier worth surfacing.
+    // With admin-tunable thresholds the old `combo < 2` magic
+    // number stopped being correct — e.g. an admin who sets
+    // tier-2 threshold = 1 wants the chip on the first bottle.
+    // Multiplier > 1.0 is the semantic ground truth.
+    if (multiplier <= 1.0 + 1e-6) {
       this.comboEl.style.opacity = '0';
       this.comboEl.style.transform = 'translateX(-50%) scale(0.85)';
       return;
     }
-    this.comboEl.textContent = `×${multiplier.toFixed(multiplier < 2 ? 1 : 0)} ·${combo}`;
+    // Big multiplier — show one decimal place only if non-integer
+    // (×2 not ×2.0; ×1.5 not ×1.5).
+    const multText = Number.isInteger(multiplier)
+      ? multiplier.toString()
+      : multiplier.toFixed(1);
+    this.comboMultEl.textContent = `×${multText}`;
+    // Caption underneath — natural English, unambiguous. "IN A ROW"
+    // beats "COMBO" because the latter is jargon and "×4 ·4" was
+    // confusing precisely because the second number had no label.
+    this.comboCountEl.textContent =
+      combo === 1 ? '1 IN A ROW' : `${combo} IN A ROW`;
     this.comboEl.style.opacity = '1';
     this.comboEl.style.transform = 'translateX(-50%) scale(1)';
     // Auto-fade if no new combo bump arrives soon. The timer is
