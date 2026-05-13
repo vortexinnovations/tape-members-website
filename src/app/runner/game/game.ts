@@ -25,7 +25,10 @@ import {
   type GLTF,
 } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
-import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import {
+  clone as cloneSkinned,
+  retargetClip,
+} from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 import {
   postToFlutter,
@@ -136,24 +139,31 @@ export class RunnerGame {
   private playerMixer?: THREE.AnimationMixer;
   private playerRunAction?: THREE.AnimationAction;
   /**
-   * Standalone Jump AnimationClip, lazy-loaded from
-   * `/models/runner_jump.fbx` (Mixamo "Without Skin" export,
-   * 375 KB — animation only, no mesh data).
+   * Raw Mixamo Jump clip + the source character it was authored
+   * against (FBXLoader gives us both at once). Both are kept so
+   * `setupJumpAction` can call `SkeletonUtils.retargetClip(target,
+   * source, clip)` to rebake the clip's tracks to point at the
+   * PLAYER's specific bone instances using `.bones[NAME]` syntax.
    *
-   * Crucially loaded via the SAME FBXLoader as the player
-   * character. Mixing FBXLoader (player) and GLTFLoader (clip)
-   * created subtle bone-name-resolution mismatches that produced
-   * a T-pose during jumps. One loader = no mismatch.
+   * Why this matters: the player FBX has 9 SkinnedMeshes with
+   * overlapping bone names (5 different Object3Ds named
+   * `mixamorig7Hips`, etc.). PropertyBinding's default name lookup
+   * picks the first depth-first match — which often isn't the
+   * Bone the SkinnedMeshes actually deform with. retargetClip
+   * sidesteps that by producing `.bones[NAME]` track names that
+   * resolve directly through `target.skeleton.bones[NAME]`.
    */
-  private playerJumpClip?: THREE.AnimationClip;
+  private playerJumpClipRaw?: THREE.AnimationClip;
+  private playerJumpSource?: THREE.Group;
   /**
-   * Jump action bound to the player's existing mixer. Wired by
-   * `setupJumpAction` once BOTH the player FBX AND the jump FBX
-   * have loaded (either order). Sits at weight 0 between jumps;
-   * `triggerJumpAnimation` fades it in on takeoff, `update()` 's
-   * landing edge-detector fades it back out.
+   * One retargeted action per player SkinnedMesh. Each action's
+   * clip targets that mesh's specific skeleton via the
+   * `.bones[NAME]` track-name format produced by
+   * `SkeletonUtils.retargetClip` — unambiguous binding, no name
+   * collisions. All actions fade in together on jump trigger and
+   * fade out on landing.
    */
-  private playerJumpAction?: THREE.AnimationAction;
+  private playerJumpActions: THREE.AnimationAction[] = [];
   /**
    * Edge detector — true on the frame after takeoff, until the
    * frame the player lands. Used to fire the run↔jump crossfade
@@ -539,16 +549,17 @@ export class RunnerGame {
         console.debug('[runner] jump fbx has no animations');
         return;
       }
-      // Strip ALL root-bone translation (X+Y+Z) so the clip is
-      // pure pose change. Mixamo's Jump translates the Hips ~1m
-      // during the leap; our collider already arcs vertically
-      // via `playerY`. Without stripping the two stack and the
-      // character flies ~twice as high as intended.
-      this.playerJumpClip = this.stripAllRootMotion(raw);
-      // If the player loaded first, attach the jump action retro-
+      // Keep BOTH the raw clip + the source character — retargetClip
+      // needs the source object alongside the clip so it can sample
+      // bone poses each frame and rebake them onto the target's
+      // specific bones. (We can't pre-retarget here because the
+      // player visual may not have loaded yet.)
+      this.playerJumpClipRaw = raw;
+      this.playerJumpSource = fbx;
+      // If the player loaded first, attach the jump actions retro-
       // actively. Otherwise `tryLoadGltfPlayer` calls
       // `setupJumpAction` itself once the mixer exists.
-      if (this.playerMixer) this.setupJumpAction();
+      if (this.playerMixer && this.playerVisual) this.setupJumpAction();
     } catch (e) {
       // eslint-disable-next-line no-console
       console.debug('[runner] jump clip load failed', e);
@@ -864,12 +875,13 @@ export class RunnerGame {
       this.playerMixer.uncacheRoot(this.playerMixer.getRoot());
       this.playerMixer = undefined;
       this.playerRunAction = undefined;
-      // Action is mixer-owned — the mixer's stopAllAction +
-      // uncacheRoot above already detached it. The CLIP
-      // (`playerJumpClip`) is intentionally NOT cleared here
-      // because it survives gender swaps: it's the raw clip
-      // data, freshly bound per-character by setupJumpAction.
-      this.playerJumpAction = undefined;
+      // Actions are mixer-owned — the mixer's stopAllAction +
+      // uncacheRoot above already detached them. The raw clip
+      // and source character (`playerJumpClipRaw` +
+      // `playerJumpSource`) are intentionally NOT cleared here:
+      // they're prefix-agnostic source data, fresh-retargeted
+      // per-character by setupJumpAction on the next load.
+      this.playerJumpActions = [];
     }
     if (this.playerVisual) {
       this.playerVisual.removeFromParent();
@@ -1155,33 +1167,87 @@ export class RunnerGame {
   }
 
   /**
-   * Attach the cached jump clip as a second action on the player's
-   * existing AnimationMixer. Safe to call multiple times — bails
-   * cleanly if the action already exists.
+   * Use `SkeletonUtils.retargetClip(target, source, clip)` to bake
+   * one retargeted clip per player SkinnedMesh, then create an
+   * action for each. The retargeted clips use `.bones[NAME]`
+   * track-name syntax — PropertyBinding resolves these via
+   * `target.skeleton.bones` lookup, which is unambiguous even
+   * with the 9 SkinnedMesh / duplicate-bone-name structure of
+   * the Mixamo character.
    *
    * Called from BOTH `loadJumpClip` (if the player was already
    * loaded when the clip arrives) and `tryLoadGltfPlayer` (after
-   * the mixer is created, if the clip was already cached). One of
-   * those two paths fires; the other is a no-op.
-   *
-   * Both run + jump stay in the "playing" state so `crossFadeTo`
-   * can lerp between them without re-priming. The jump action
-   * sits at effectiveWeight=0 until `jump()` triggers the takeoff.
+   * the mixer is created, if the clip was already cached).
    */
   private setupJumpAction() {
-    if (this.playerJumpAction) return; // already wired
-    if (!this.playerJumpClip || !this.playerMixer) return;
+    if (this.playerJumpActions.length > 0) return; // already wired
+    if (
+      !this.playerJumpClipRaw ||
+      !this.playerJumpSource ||
+      !this.playerMixer ||
+      !this.playerVisual
+    ) {
+      return;
+    }
 
-    // Same call shape as the run action in `tryLoadGltfPlayer`.
-    // Both clips come from FBXLoader against the same player FBX,
-    // so PropertyBinding resolves cleanly — no per-SkinnedMesh
-    // tricks needed.
-    const action = this.playerMixer.clipAction(this.playerJumpClip);
-    action.setLoop(THREE.LoopOnce, 1);
-    action.clampWhenFinished = true; // hold the last frame after landing
-    action.play();
-    action.setEffectiveWeight(0); // invisible until jump triggers fade-in
-    this.playerJumpAction = action;
+    const skinnedMeshes: THREE.SkinnedMesh[] = [];
+    this.playerVisual.traverse((obj) => {
+      if (obj instanceof THREE.SkinnedMesh) skinnedMeshes.push(obj);
+    });
+    if (skinnedMeshes.length === 0) return;
+
+    for (const mesh of skinnedMeshes) {
+      // Retarget the clip onto THIS mesh's specific skeleton.
+      // SkeletonUtils.retargetClip walks the source's bones at
+      // every frame, samples the clip's resulting pose, then
+      // writes those poses back as `.bones[BONENAME]` tracks on
+      // the target's bones. The result binds unambiguously.
+      let retargeted: THREE.AnimationClip;
+      try {
+        retargeted = retargetClip(
+          mesh,
+          this.playerJumpSource,
+          this.playerJumpClipRaw,
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[runner/jump] retargetClip failed for ${mesh.name}`,
+          e,
+        );
+        continue;
+      }
+      // One-time log: confirm the retargeted clip actually has
+      // tracks (an empty result silently produces T-pose). Also
+      // peek at a sample track's keyframe values so we can tell
+      // at a glance whether retargeting captured real motion or
+      // a static pose.
+      // eslint-disable-next-line no-console
+      console.log(
+        `[runner/jump] retargeted ${mesh.name}: tracks=${retargeted.tracks.length}, ` +
+          `firstTrack="${retargeted.tracks[0]?.name}" ` +
+          `keyframes=${
+            retargeted.tracks[0]
+              ? retargeted.tracks[0].values.length /
+                retargeted.tracks[0].getValueSize()
+              : 0
+          }`,
+      );
+
+      // Strip root-bone translation (X+Y+Z) so the clip is pure
+      // pose change. Mixamo's Jump translates the Hips ~1m during
+      // the leap; our collider already arcs vertically via
+      // `playerY`. Without stripping, the two stack and the
+      // character flies ~twice as high as intended.
+      const final = this.stripAllRootMotion(retargeted);
+
+      const action = this.playerMixer.clipAction(final, mesh);
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true; // hold the last frame after landing
+      action.play();
+      action.setEffectiveWeight(0); // invisible until jump triggers fade-in
+      this.playerJumpActions.push(action);
+    }
   }
 
   // ── Input ───────────────────────────────────────────────────────
@@ -1295,24 +1361,30 @@ export class RunnerGame {
    * frames sync with the actual arc.
    */
   private triggerJumpAnimation() {
-    const jumpAction = this.playerJumpAction;
+    const jumpActions = this.playerJumpActions;
     const runAction = this.playerRunAction;
-    if (!jumpAction || !runAction || !this.playerJumpClip) return;
+    if (jumpActions.length === 0 || !runAction || !this.playerJumpClipRaw) {
+      return;
+    }
 
     const airtime = (2 * this.jumpVelocity) / Math.abs(PLAYER.GRAVITY);
     // Floor airtime defensively — if an admin set jumpVelocity to
     // 0.0001 we don't want timeScale → infinity.
     const safeAirtime = Math.max(0.2, airtime);
-    jumpAction.timeScale = this.playerJumpClip.duration / safeAirtime;
+    const timeScale = this.playerJumpClipRaw.duration / safeAirtime;
 
-    // Restart the clip from frame 0 each jump so the takeoff pose
-    // is in sync with the moment the collider leaves the ground.
-    jumpAction.reset();
-    jumpAction.setLoop(THREE.LoopOnce, 1);
-    jumpAction.clampWhenFinished = true;
-    // 0.10s fade-in — fast enough that the takeoff feels reactive,
-    // slow enough to avoid a hard pop on the running pose.
-    runAction.crossFadeTo(jumpAction, 0.10, false);
+    // Fade run out + every jump action in. fadeIn/fadeOut work
+    // independently per action so concurrent multi-target fades
+    // (one per SkinnedMesh) don't fight each other the way
+    // crossFadeTo's 1-to-1 pairing would.
+    runAction.fadeOut(0.10);
+    for (const action of jumpActions) {
+      action.timeScale = timeScale;
+      action.reset();
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.fadeIn(0.10);
+    }
   }
 
   /**
@@ -1425,12 +1497,13 @@ export class RunnerGame {
     // weight lerp — no re-prime needed.
     if (grounded && this.wasInAir) {
       this.wasInAir = false;
-      const jumpAction = this.playerJumpAction;
+      const jumpActions = this.playerJumpActions;
       const runAction = this.playerRunAction;
-      if (jumpAction && runAction) {
+      if (jumpActions.length > 0 && runAction) {
         // Run cycle has been looping behind weight 0 throughout
-        // the jump — crossFadeTo lerps the weights over 0.10 s.
-        jumpAction.crossFadeTo(runAction, 0.10, false);
+        // the jump — fade every jump action out + fade run back in.
+        for (const action of jumpActions) action.fadeOut(0.10);
+        runAction.fadeIn(0.10);
       }
     }
     if (!grounded) this.wasInAir = true;
