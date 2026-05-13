@@ -2570,20 +2570,32 @@ export class RunnerGame {
       // Three tiers above the baseline (which is always 0/×1.0).
       // Each is independently optional in Firestore; missing
       // values fall back to the instance defaults (5/×1.5,
-      // 10/×2.0, 20/×3.0).
-      if (typeof s.comboTier2Threshold === 'number' && s.comboTier2Threshold >= 2) {
+      // 10/×2.0, 20/×3.0). Threshold gate is `>= 1` — combo starts
+      // at 0 and increments to 1 on the first scoring pickup, so
+      // 1 means "fires on the first bottle". 0 would mean "always
+      // fires" which is degenerate; we reject that.
+      if (
+        typeof s.comboTier2Threshold === 'number' &&
+        s.comboTier2Threshold >= 1
+      ) {
         this.comboTier2Threshold = Math.floor(s.comboTier2Threshold);
       }
       if (typeof s.comboTier2Multiplier === 'number' && s.comboTier2Multiplier > 0) {
         this.comboTier2Multiplier = s.comboTier2Multiplier;
       }
-      if (typeof s.comboTier3Threshold === 'number' && s.comboTier3Threshold >= 2) {
+      if (
+        typeof s.comboTier3Threshold === 'number' &&
+        s.comboTier3Threshold >= 1
+      ) {
         this.comboTier3Threshold = Math.floor(s.comboTier3Threshold);
       }
       if (typeof s.comboTier3Multiplier === 'number' && s.comboTier3Multiplier > 0) {
         this.comboTier3Multiplier = s.comboTier3Multiplier;
       }
-      if (typeof s.comboTier4Threshold === 'number' && s.comboTier4Threshold >= 2) {
+      if (
+        typeof s.comboTier4Threshold === 'number' &&
+        s.comboTier4Threshold >= 1
+      ) {
         this.comboTier4Threshold = Math.floor(s.comboTier4Threshold);
       }
       if (typeof s.comboTier4Multiplier === 'number' && s.comboTier4Multiplier > 0) {
