@@ -1243,29 +1243,68 @@ export class RunnerGame {
     if (this.playerJumpAction) return; // already wired
     if (!this.playerJumpClip || !this.playerMixer || !this.playerVisual) return;
 
-    const playerPrefix = this.detectPlayerBonePrefix(this.playerVisual);
-    if (!playerPrefix) {
-      // eslint-disable-next-line no-console
-      console.debug(
-        '[runner] no Hips bone found on player — cannot bind jump clip',
-      );
-      return;
-    }
-    // The Jump GLB's source bones were `mixamorig7:Hips` etc.,
-    // but GLTFLoader stripped every colon during sanitizeNodeName,
-    // so the clip's tracks reference `mixamorig7Hips.position`
-    // (no colon). The player's FBX-loaded bones still have their
-    // colons. We re-insert by rewriting every track's leading
-    // `mixamorig7` → the player's actual prefix (which for male is
-    // `mixamorig7:` and for female is `mixamorig:`). This is the
-    // critical bind step — without it, none of the tracks resolve
-    // and the player snaps to bind-pose (T-pose) when the jump
-    // action's weight goes up.
-    const retargeted = this.retargetClipPrefix(
-      this.playerJumpClip,
-      'mixamorig7',
-      playerPrefix,
+    // ── Diagnostics — names actually present at runtime ──
+    // BOTH FBXLoader and GLTFLoader call PropertyBinding.sanitizeNode
+    // Name() on every node name, which strips `:` along with other
+    // reserved chars. So at runtime the player's bones SHOULD be
+    // `mixamorig7Hips` (no colon) and the jump clip's tracks SHOULD
+    // be `mixamorig7Hips.position` — direct match, no rename
+    // needed. But the player still snaps to T-pose on jump, which
+    // means some name actually IS diverging somewhere. Log both
+    // sides so we can see the real shapes.
+    const playerBoneNames: string[] = [];
+    this.playerVisual.traverse((obj) => {
+      if (obj instanceof THREE.Bone) playerBoneNames.push(obj.name);
+    });
+    const clipTrackNames = this.playerJumpClip.tracks.map((t) => t.name);
+    // eslint-disable-next-line no-console
+    console.log(
+      '[runner/jump] player bones (first 8):',
+      playerBoneNames.slice(0, 8),
     );
+    // eslint-disable-next-line no-console
+    console.log(
+      '[runner/jump] clip tracks (first 8):',
+      clipTrackNames.slice(0, 8),
+    );
+    // Cross-check: every track's bone-name segment vs the player's
+    // bone name set. Report mismatches (and tally so we can tell at
+    // a glance how broken the binding is).
+    const playerSet = new Set(playerBoneNames);
+    const missing: string[] = [];
+    const matched: string[] = [];
+    for (const tn of clipTrackNames) {
+      const boneSegment = tn.split('.')[0];
+      if (playerSet.has(boneSegment)) matched.push(boneSegment);
+      else missing.push(boneSegment);
+    }
+    // eslint-disable-next-line no-console
+    console.log(
+      `[runner/jump] track→bone binding: ${matched.length} match, ` +
+        `${missing.length} miss. First 5 misses:`,
+      missing.slice(0, 5),
+    );
+    // Also through the Flutter bridge so the diagnostic reaches
+    // the app side without dev-tools access.
+    postToFlutter({
+      type: 'log',
+      level: 'info',
+      message:
+        `jump-bind: ${matched.length}/${clipTrackNames.length} bind ok. ` +
+        `bones[0..2]=[${playerBoneNames.slice(0, 3).join(',')}] ` +
+        `tracks[0..2]=[${clipTrackNames.slice(0, 3).join(',')}] ` +
+        `miss[0..2]=[${missing.slice(0, 3).join(',')}]`,
+    });
+
+    // No retargeting for the moment — letting GLTFLoader/FBXLoader's
+    // shared sanitizeNodeName do its job. The retargetClipPrefix
+    // helper stays around for the next investigation but is unused
+    // until we know what's actually mismatched. (Previous "always
+    // re-insert the colon" version was wrong: FBXLoader also strips
+    // colons, so both sides should land at `mixamorig7Hips` — no
+    // rewrite needed. The diagnostic above prints what's ACTUALLY
+    // on each side so we can see if anything is diverging.)
+    const retargeted = this.playerJumpClip;
 
     const action = this.playerMixer.clipAction(retargeted);
     action.setLoop(THREE.LoopOnce, 1);
