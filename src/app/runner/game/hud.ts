@@ -476,7 +476,14 @@ export class HUD {
    *  hint. RunnerGame flips this once the player FBX + jump
    *  character are both loaded and the GPU pre-warm pipeline has
    *  run. While loading is true the input handler should also
-   *  ignore taps/swipes. */
+   *  ignore taps/swipes.
+   *
+   *  Note: when un-loading, we EXPLICITLY restore each element's
+   *  original `display` value rather than blanking the inline
+   *  property. Setting `style.display = ''` falls through to the
+   *  element's CSS default (`block` for divs), which would clobber
+   *  the inline `display: flex` we set on the arrow row at
+   *  construction — breaking the horizontal arrow layout. */
   setLoading(loading: boolean) {
     if (loading) {
       this.hintArrowRow.style.display = 'none';
@@ -485,8 +492,8 @@ export class HUD {
       this.inputHintEl.style.opacity = '1';
     } else {
       this.hintLoadingWrap.style.display = 'none';
-      this.hintArrowRow.style.display = '';
-      this.hintStartLabel.style.display = '';
+      this.hintArrowRow.style.display = 'flex'; // restores horizontal arrow row
+      this.hintStartLabel.style.display = 'block';
     }
   }
 
