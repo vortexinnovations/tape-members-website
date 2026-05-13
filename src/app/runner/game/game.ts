@@ -2131,23 +2131,105 @@ export class RunnerGame {
           if (obj instanceof THREE.SkinnedMesh) obj.frustumCulled = false;
         });
 
-        // Auto-scale to fit the obstacle's nominal height.
-        const bbox = new THREE.Box3().setFromObject(visual);
-        const rawH = Math.max(0.01, bbox.max.y - bbox.min.y);
-        const scaleFactor = spec.height / rawH;
-        visual.scale.setScalar(scaleFactor);
-
         // Face the camera (running player approaches from +Z) so
         // the dance reads from the front.
         visual.rotation.y = Math.PI;
 
-        // Ground-align: after scaling, the model's local-space feet
-        // are at y = bbox.min.y * scaleFactor. We want feet at the
-        // bottom of the collider (y = -spec.height/2 in collider
-        // space). So shift the visual so its scaled-feet line up
-        // with the box bottom.
-        visual.position.y = -spec.height / 2 - bbox.min.y * scaleFactor;
+        // Parent into the collider first so getWorldPosition reflects
+        // the full chain (collider → visual → Armature → bone).
         mesh.add(visual);
+
+        // ── Bone-based height + ground alignment ───────────────
+        // Do NOT use Box3.setFromObject on a SkinnedMesh — its bbox
+        // reflects the bind-pose vertex positions transformed by the
+        // mesh's matrixWorld, ignoring both the bone skinning AND any
+        // weird Armature rotation. For Mixamo's GLB export the
+        // Armature has scale=0.01 + a 90° X tilt, so the bind-pose
+        // mesh is "lying on its back" and Box3 returns the depth as
+        // the height → wildly wrong scale factor (≈500× over-scale,
+        // hence the "giant boots filling the screen" symptom).
+        //
+        // Instead, walk the bone tree and use the world-Y of the
+        // lowest foot/toe/ankle bone and the highest head/top bone.
+        // Bone world positions already include the Armature scale,
+        // rotation, and the bone hierarchy — they're the same Y
+        // coordinates the skinned vertices end up near.
+        visual.updateMatrixWorld(true);
+        let lowFootY = Infinity;
+        let highHeadY = -Infinity;
+        const probe = new THREE.Vector3();
+        visual.traverse((obj) => {
+          if (!(obj instanceof THREE.Bone)) return;
+          const n = obj.name.toLowerCase();
+          obj.getWorldPosition(probe);
+          if (
+            n.includes('toe') ||
+            n.includes('foot') ||
+            n.includes('ankle')
+          ) {
+            if (probe.y < lowFootY) lowFootY = probe.y;
+          }
+          if (
+            n.includes('headtop') ||
+            n.endsWith(':head') ||
+            n.endsWith('head_end') ||
+            n === 'head'
+          ) {
+            if (probe.y > highHeadY) highHeadY = probe.y;
+          }
+        });
+
+        // Default scale: assume the rig is already roughly 1.7 m tall
+        // in world space if we can't measure it. Otherwise fit the
+        // measured head-to-feet span into spec.height.
+        let scaleFactor = 1;
+        if (
+          isFinite(lowFootY) &&
+          isFinite(highHeadY) &&
+          highHeadY - lowFootY > 0.2
+        ) {
+          const measuredH = highHeadY - lowFootY;
+          scaleFactor = spec.height / measuredH;
+        }
+        visual.scale.setScalar(scaleFactor);
+        visual.updateMatrixWorld(true);
+
+        // Re-measure foot Y after scaling so we can drop the model
+        // onto the floor of the collider box. Collider box centre is
+        // at the obstacle's world position (handled by the caller),
+        // so its floor in the local frame is y = -spec.height/2.
+        let newLowFootY = Infinity;
+        visual.traverse((obj) => {
+          if (!(obj instanceof THREE.Bone)) return;
+          const n = obj.name.toLowerCase();
+          if (
+            !n.includes('toe') &&
+            !n.includes('foot') &&
+            !n.includes('ankle')
+          ) {
+            return;
+          }
+          obj.getWorldPosition(probe);
+          if (probe.y < newLowFootY) newLowFootY = probe.y;
+        });
+        if (isFinite(newLowFootY)) {
+          // The collider mesh's local origin is at the collider's centre.
+          // We want the feet at world Y = (collider centre Y) - spec.height/2,
+          // i.e. at local Y = -spec.height/2 relative to the collider.
+          // newLowFootY is the world Y when visual.position.y is 0, so
+          // adjust by (target - newLowFootY).
+          // The collider is added to the scene later at obstacle baseY,
+          // but for this measurement what matters is the OFFSET of the
+          // feet relative to the collider's local origin — which is
+          // currently `newLowFootY - mesh.position.y`. Since the
+          // collider hasn't been added to the scene yet, mesh world Y
+          // equals its local Y (defaults to 0), so newLowFootY IS the
+          // current foot offset in collider-local space.
+          visual.position.y = -spec.height / 2 - newLowFootY;
+        } else {
+          // No foot bones matched — fall back to half-height shift.
+          visual.position.y = -spec.height / 2;
+        }
 
         // Random start offset so every bouncer is at a different
         // point in the dance loop. Otherwise the lineup of
