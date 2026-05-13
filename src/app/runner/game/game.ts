@@ -128,6 +128,14 @@ export class RunnerGame {
     driftAmp: number;
   }[] = [];
 
+  /**
+   * Cached canvas-texture used as the glowing shield badge on every
+   * champagne / magnum / methuselah pickup. Lazily built on the
+   * first champagne spawn; reused for the lifetime of the game,
+   * disposed in dispose().
+   */
+  private champagneLabelTexture?: THREE.CanvasTexture;
+
   // HUD overlay (DOM) — created on construction, owns vignette + counters.
   private hud: HUD;
 
@@ -999,6 +1007,97 @@ export class RunnerGame {
 
   // ── Spawning ────────────────────────────────────────────────────
 
+  /**
+   * Lazily build (and cache) the glowing shield-shape texture used
+   * as the front label on champagne / magnum / methuselah pickups.
+   * Drawn on a 256×320 canvas (~4:5 aspect, matching the real
+   * Dom Pérignon Luminous shield). Path:
+   *
+   *   ┌──────┐    rounded-rectangle top portion
+   *   │      │
+   *   │      │    straight sides for the upper half
+   *   ╲      ╱    curve inward
+   *     ╲  ╱      meeting at a point at the bottom
+   *
+   * Filled with a bright neon green (matches the body's emissive
+   * tone) plus a strong shadow-blur glow ring so the badge reads
+   * as luminous through fog. A small dark star at the bottom
+   * gestures toward the brand mark inside a real Dom Pérignon
+   * label without committing to specific brand text.
+   */
+  private getChampagneLabelTexture(): THREE.CanvasTexture {
+    if (this.champagneLabelTexture) return this.champagneLabelTexture;
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 320;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      // Fallback: blank texture if canvas isn't available. Won't
+      // happen in browsers but keeps TS happy.
+      const t = new THREE.CanvasTexture(canvas);
+      this.champagneLabelTexture = t;
+      return t;
+    }
+
+    // Shield outline path — corners at top, taper to a point at
+    // the bottom. The numbers map to canvas px.
+    const drawShieldPath = () => {
+      ctx.beginPath();
+      ctx.moveTo(40, 30);
+      ctx.lineTo(216, 30);
+      ctx.lineTo(216, 140);
+      ctx.quadraticCurveTo(216, 240, 128, 286);
+      ctx.quadraticCurveTo(40, 240, 40, 140);
+      ctx.closePath();
+    };
+
+    // Pass 1 — outer glow via shadowBlur.
+    ctx.shadowColor = 'rgba(76, 255, 156, 0.9)';
+    ctx.shadowBlur = 36;
+    ctx.fillStyle = 'rgba(76, 255, 156, 0.95)';
+    drawShieldPath();
+    ctx.fill();
+
+    // Pass 2 — solid fill without shadow for a crisp body.
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(76, 255, 156, 0.95)';
+    drawShieldPath();
+    ctx.fill();
+
+    // Inner dark outline so the shield's edge reads against bright
+    // backgrounds (club-light pulses can wash out the neon green).
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0, 60, 30, 0.55)';
+    drawShieldPath();
+    ctx.stroke();
+
+    // Small dark star near the bottom of the shield — pure
+    // decoration; reads as a brand mark from a distance.
+    ctx.fillStyle = 'rgba(0, 50, 25, 0.7)';
+    const cx = 128;
+    const cy = 220;
+    const r = 16;
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const ang = (i / 10) * Math.PI * 2 - Math.PI / 2;
+      const rad = i % 2 === 0 ? r : r * 0.4;
+      const x = cx + Math.cos(ang) * rad;
+      const y = cy + Math.sin(ang) * rad;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    const t = new THREE.CanvasTexture(canvas);
+    // Pixel-snap rendering off so the shield's curves don't look
+    // jagged when scaled down to bottle size.
+    t.minFilter = THREE.LinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    this.champagneLabelTexture = t;
+    return t;
+  }
+
   private spawnPickup() {
     const spec = rollPickup();
     // Build the pickup as a Group, parented under an invisible
@@ -1062,45 +1161,33 @@ export class RunnerGame {
       body.position.y = bodyH / 2;
       group.add(body);
 
-      // Glowing GREEN label band — slightly wider than the body so
-      // it visually layers on top. MeshBasicMaterial so it ignores
-      // scene lighting and stays bright in the dark fog (mirrors
-      // how Dom Pérignon Luminous bottles emit light from the
-      // label region rather than reflecting it).
-      const labelH = bodyH * 0.42;
-      const labelR = spec.radius * 1.015;
-      const labelMat = new THREE.MeshBasicMaterial({
-        color: 0x4cff9c,
+      // Glowing GREEN shield badge — a flat sprite parented at the
+      // bottle's Y rotation axis (X=0, Z=0). Sprites always face the
+      // camera, so the badge stays oriented to the player regardless
+      // of how the bottle is spinning underneath. Placing it AT the
+      // rotation axis means the spin doesn't translate the sprite
+      // around the bottle's centre — it stays put on the front.
+      //
+      // The shield-shape texture is generated once on first call
+      // and cached on the game instance.
+      const labelTexture = this.getChampagneLabelTexture();
+      const labelMat = new THREE.SpriteMaterial({
+        map: labelTexture,
         transparent: true,
-        opacity: 0.85,
+        depthWrite: false, // avoid z-fighting with the bottle body
       });
-      const label = new THREE.Mesh(
-        new THREE.CylinderGeometry(labelR * 0.98, labelR, labelH, 18, 1, true),
-        labelMat,
-      );
-      // Centred on the body, slightly below middle to match the
-      // real Dom Pérignon label position (lower 60% of the body).
-      label.position.y = bodyH * 0.38;
-      // Render after body so transparency composites cleanly.
-      label.renderOrder = 1;
+      const label = new THREE.Sprite(labelMat);
+      // Sprite scale = world-space dimensions of the rendered quad.
+      // Width ≈ 1.4 × body radius keeps the badge inside the bottle's
+      // silhouette from the front. Height is wider × the canvas
+      // aspect ratio (320/256 = 1.25).
+      const labelWidth = spec.radius * 1.4;
+      const labelHeight = labelWidth * 1.25;
+      label.scale.set(labelWidth, labelHeight, 1);
+      // Centred on the lower-middle of the body — same vertical
+      // placement as the real Dom Pérignon shield.
+      label.position.set(0, bodyH * 0.5, 0);
       group.add(label);
-
-      // Faint inner glow caps — close the cylinder ends so the
-      // label doesn't look hollow when viewed at oblique angles.
-      // These are tiny ring discs at top + bottom of the band.
-      const labelCapGeo = new THREE.RingGeometry(
-        labelR * 0.92,
-        labelR,
-        18,
-      );
-      const labelCapTop = new THREE.Mesh(labelCapGeo, labelMat);
-      labelCapTop.rotation.x = -Math.PI / 2;
-      labelCapTop.position.y = bodyH * 0.38 + labelH / 2;
-      group.add(labelCapTop);
-      const labelCapBottom = new THREE.Mesh(labelCapGeo, labelMat);
-      labelCapBottom.rotation.x = Math.PI / 2;
-      labelCapBottom.position.y = bodyH * 0.38 - labelH / 2;
-      group.add(labelCapBottom);
 
       // Shoulder — sharp taper from body radius down to neck radius.
       const shoulder = new THREE.Mesh(
@@ -1611,13 +1698,18 @@ export class RunnerGame {
     this.resizeObserver?.disconnect();
     this.hud.dispose();
     this.scene.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) {
-        obj.geometry.dispose();
+      if (obj instanceof THREE.Mesh || obj instanceof THREE.Sprite) {
+        // Sprites don't have geometry but do have material.
+        if (obj instanceof THREE.Mesh) obj.geometry.dispose();
         const m = obj.material;
         if (Array.isArray(m)) m.forEach((mat) => mat.dispose());
         else m.dispose();
       }
     });
+    // The cached champagne-label canvas texture is shared across all
+    // bottle sprites; dispose it explicitly once the scene traversal
+    // can't (since we hand the same texture to multiple materials).
+    this.champagneLabelTexture?.dispose();
     this.renderer.dispose();
   }
 }
