@@ -1305,44 +1305,35 @@ export class RunnerGame {
       this.playerJumpActions.push(action);
     }
 
-    // Sample the clip itself at multiple times to verify there's
-    // actually motion in it. If frame-0 == frame-mid == frame-end
-    // the clip is a static T-pose (export bug) and no binding
-    // strategy will fix it — we'd need a new asset.
-    //
-    // We don't have a public "evaluate this clip at time T" in
-    // Three.js, so do the inverse: pick three sample times, scrub
-    // the action to each, force a mixer tick, read the bone state.
-    const sampleAction =
-      this.playerJumpActions[0] ||
-      this.playerMixer.clipAction(this.playerJumpClip);
-    const sampleProbeBone =
-      skinnedMeshes
-        .find((m) => /body/i.test(m.name))
-        ?.skeleton?.getBoneByName('mixamorig7LeftShoulder') ||
-      skinnedMeshes[1].skeleton?.getBoneByName('mixamorig7LeftShoulder');
-    const sampleTimes = [
-      0,
-      this.playerJumpClip.duration * 0.25,
-      this.playerJumpClip.duration * 0.5,
-      this.playerJumpClip.duration * 0.75,
-      Math.max(0, this.playerJumpClip.duration - 0.001),
-    ];
-    sampleAction.play();
-    sampleAction.setEffectiveWeight(1);
-    const samples: string[] = [];
-    for (const t of sampleTimes) {
-      sampleAction.time = t;
-      this.playerMixer.update(0);
-      samples.push(
-        `t=${t.toFixed(2)}: LeftShoulder ${probeBone(sampleProbeBone)}`,
+    // Inspect the clip's raw keyframe data directly. Bypasses
+    // mixer/binding/action complexity — if these values are
+    // constant, the clip itself is a static pose (bad export).
+    // If they vary, the clip has motion and the bug is downstream
+    // (mixer state, action ordering, weight conflicts, etc.).
+    const inspectTrack = (trackName: string) => {
+      const t = this.playerJumpClip!.tracks.find((tr) => tr.name === trackName);
+      if (!t) {
+        console.log(`[runner/jump-debug] track "${trackName}" NOT in clip`);
+        return;
+      }
+      const values = t.values;
+      const stride = t.getValueSize();
+      const frames = values.length / stride;
+      const first = Array.from(values.slice(0, stride));
+      const midStart = Math.floor(frames / 2) * stride;
+      const mid = Array.from(values.slice(midStart, midStart + stride));
+      const last = Array.from(values.slice(-stride));
+      const fmtArr = (a: number[]) =>
+        '[' + a.map((v) => v.toFixed(3)).join(',') + ']';
+      console.log(
+        `[runner/jump-debug] clip track "${trackName}": frames=${frames}, ` +
+          `first=${fmtArr(first)}, mid=${fmtArr(mid)}, last=${fmtArr(last)}`,
       );
-    }
-    sampleAction.setEffectiveWeight(0);
-    sampleAction.time = 0;
-    console.log(
-      `[runner/jump-debug] clip motion samples:\n  ${samples.join('\n  ')}`,
-    );
+    };
+    inspectTrack('mixamorig7Hips.quaternion');
+    inspectTrack('mixamorig7LeftShoulder.quaternion');
+    inspectTrack('mixamorig7LeftLeg.quaternion');
+    inspectTrack('mixamorig7Spine.quaternion');
 
     // Body-specific: dump its full bone-name list so we know the
     // shape of its skeleton, AND its parent in the scene graph
