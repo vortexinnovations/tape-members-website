@@ -26,10 +26,6 @@ export class HUD {
    *  can wipe and rebuild the cells when the admin reconfigures
    *  the max level. */
   private buzzWrap!: HTMLDivElement;
-  /** A spacer in the top-row that mirrors `buzzWrap`'s width so
-   *  the score column stays visually centred when the combo
-   *  element moves out to its own absolute-positioned slot. */
-  private topRowSpacer!: HTMLDivElement;
   private buzzCells: HTMLDivElement[] = [];
   /** Cached max-buzz value so setBuzz() knows when to engage the
    *  danger-zone pulse. Kept in sync with Buzz.getMaxLevel(). */
@@ -117,19 +113,30 @@ export class HUD {
       webkitUserSelect: 'none',
     } satisfies Partial<CSSStyleDeclaration>);
 
-    // ── Top row — buzz meter (left) / score (centre) / combo (right) ──
+    // ── Top row — just the score column, centred ──
+    // (Buzz meter + combo chip have both moved to bottom-centre,
+    // grouped together below the running character so the player
+    // doesn't need to look away from the action to read either.)
     const topRow = document.createElement('div');
     Object.assign(topRow.style, {
       display: 'flex',
-      justifyContent: 'space-between',
+      justifyContent: 'center',
       alignItems: 'flex-start',
-      gap: '12px',
     });
     this.root.appendChild(topRow);
 
-    // Buzz meter — 5 vertical segments stacked into a horizontal pill.
+    // Buzz meter — horizontal pill, positioned absolutely at the
+    // bottom of the screen just below the combo chip. The cells
+    // are generated dynamically by `rebuildBuzzCells` so the count
+    // tracks the admin-configured maxTipsyLevel.
     this.buzzWrap = document.createElement('div');
     Object.assign(this.buzzWrap.style, {
+      position: 'absolute',
+      left: '50%',
+      // Below the combo chip (which sits at 100px above safe-area).
+      // Buzz pill is ~32px tall, combo chip ~38px — gives ~10px gap.
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 50px)',
+      transform: 'translateX(-50%)',
       display: 'flex',
       gap: '4px',
       padding: '6px 8px',
@@ -144,7 +151,10 @@ export class HUD {
     // Build the cells via the dedicated helper so we can rebuild
     // them when the admin changes `maxTipsyLevel` mid-session.
     this.rebuildBuzzCells(this.buzzMaxLevel);
-    topRow.appendChild(this.buzzWrap);
+    // Buzz meter is absolutely positioned at the bottom of the
+    // screen (see styles above), so we append it to the HUD root
+    // rather than the top row.
+    this.root.appendChild(this.buzzWrap);
 
     // Score column (centre)
     const scoreCol = document.createElement('div');
@@ -178,14 +188,9 @@ export class HUD {
     scoreCol.appendChild(this.distEl);
     topRow.appendChild(scoreCol);
 
-    // Spacer on the right side of the top row — matches the buzz
-    // meter's approximate width so the score column stays visually
-    // centred in the flex `space-between` layout. The combo chip
-    // itself lives separately at the bottom of the screen below
-    // the running character (see `comboEl` below).
-    this.topRowSpacer = document.createElement('div');
-    this.topRowSpacer.style.width = '110px';
-    topRow.appendChild(this.topRowSpacer);
+    // (No spacer / no right-side element in the top row anymore —
+    // the buzz meter and combo chip both live at the bottom now,
+    // so the top row is purely the centred score column.)
 
     // Combo chip — absolutely positioned below the character so
     // it's right in the player's field of view during gameplay,
