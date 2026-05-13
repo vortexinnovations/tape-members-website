@@ -304,6 +304,10 @@ export class HUD {
       glyph: string,
       keyframeName: string,
       label: string,
+      /** Pixels to translate the wrap upward. Used to elevate the
+       *  JUMP arrow so the hint reads spatially as ←  ↑  → instead
+       *  of three horizontal arrows in a flat row. */
+      liftY = 0,
     ): HTMLDivElement => {
       const wrap = document.createElement('div');
       Object.assign(wrap.style, {
@@ -311,6 +315,7 @@ export class HUD {
         flexDirection: 'column',
         alignItems: 'center',
         gap: '6px',
+        transform: liftY > 0 ? `translateY(-${liftY}px)` : 'none',
       });
       const arrow = document.createElement('div');
       arrow.textContent = glyph;
@@ -335,7 +340,9 @@ export class HUD {
       return wrap;
     };
     arrowRow.appendChild(makeArrow('←', 'tapeRunnerHintLeft', 'DODGE'));
-    arrowRow.appendChild(makeArrow('↑', 'tapeRunnerHintUp', 'JUMP'));
+    // JUMP sits ~28px above the dodge arrows so the three glyphs
+    // form a spatial cross-pattern instead of a flat row.
+    arrowRow.appendChild(makeArrow('↑', 'tapeRunnerHintUp', 'JUMP', 28));
     arrowRow.appendChild(makeArrow('→', 'tapeRunnerHintRight', 'DODGE'));
     this.inputHintEl.appendChild(arrowRow);
 
