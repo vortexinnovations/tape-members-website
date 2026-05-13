@@ -688,18 +688,27 @@ export class RunnerGame {
     await this.renderer.compileAsync(this.scene, this.camera);
     const compileAsyncMs = performance.now() - compileAsyncStart;
 
-    // 3. Canvas-sized off-screen render. With shaders confirmed
-    //    ready, this exercises any remaining resolution-dependent
-    //    GPU paths (mipmap binding, FBO state) at full size.
-    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    const warmW = Math.max(1, Math.floor(size.x));
-    const warmH = Math.max(1, Math.floor(size.y));
-    const warmTarget = new THREE.WebGLRenderTarget(warmW, warmH);
-    const prevTarget = this.renderer.getRenderTarget();
-    this.renderer.setRenderTarget(warmTarget);
+    // 3. CRITICAL — render once to the CANVAS framebuffer itself.
+    //    Off-screen WebGLRenderTarget renders use a different FBO,
+    //    so any FBO-specific GPU state caching (Chrome's canvas
+    //    composition path, framebuffer attachment validation, etc.)
+    //    isn't primed by them. The diagnostic showed frame 1's
+    //    canvas render was 713 ms even after textures + shaders
+    //    were fully prepped via off-screen pre-warm. Only an actual
+    //    canvas render with the jump character visible primes it.
+    //
+    //    The user momentarily sees the jump character on screen
+    //    instead of the runner. With the swipe-to-start input-hint
+    //    overlay up and the runner running in place at the same
+    //    position, the 1-frame swap is barely noticeable — and we
+    //    immediately swap back to the runner before the next rAF
+    //    tick.
+    const runnerWasVisible = this.playerVisual?.visible ?? true;
+    if (this.playerVisual) this.playerVisual.visible = false;
+    const canvasRenderStart = performance.now();
     this.renderer.render(this.scene, this.camera);
-    this.renderer.setRenderTarget(prevTarget);
-    warmTarget.dispose();
+    const canvasRenderMs = performance.now() - canvasRenderStart;
+    if (this.playerVisual) this.playerVisual.visible = runnerWasVisible;
 
     // Reset the action so the first real jump starts at frame 0.
     this.playerJumpAction.stop();
@@ -709,7 +718,8 @@ export class RunnerGame {
     console.log(
       `[runner/jump-warm] install complete in ${(performance.now() - warmStart).toFixed(1)}ms ` +
         `(uploaded ${seenTextures.size} textures, ` +
-        `compileAsync=${compileAsyncMs.toFixed(1)}ms, target=${warmW}×${warmH})`,
+        `compileAsync=${compileAsyncMs.toFixed(1)}ms, ` +
+        `canvas-warm=${canvasRenderMs.toFixed(1)}ms)`,
     );
     /* eslint-enable no-console */
   }
