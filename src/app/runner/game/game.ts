@@ -510,14 +510,23 @@ export class RunnerGame {
     // bouncers that spawn before it lands use the procedural
     // humanoid fallback automatically.
     this.loadBouncerModel();
-    this.loadJumpCharacter();
+    // Jump character load is gender-aware — fired from
+    // `buildPlayerVisual` once we know which character to load.
   }
 
   /**
+   * Currently-loaded jump character's gender, so we don't refetch
+   * the same FBX on no-op gender changes. Set to the resolved
+   * suffix ('male' / 'female'), or '' if no jump character is
+   * loaded yet.
+   */
+  private loadedJumpGender = '';
+
+  /**
    * Load the "jumping" character — a full Mixamo "with skin" FBX
-   * export of the same Ch33 male character, carrying the Jump
-   * animation. Treated as a separate visible entity that we swap
-   * visibility with the running character on jump/landing.
+   * carrying the Jump animation. Treated as a separate visible
+   * entity that we swap visibility with the running character on
+   * jump/landing.
    *
    * Why a whole second character instead of extracting + retargeting
    * the clip onto the running character: cross-FBX bone-rotation
@@ -527,24 +536,72 @@ export class RunnerGame {
    * Swapping characters sidesteps the issue entirely. Each FBX
    * runs its own animation against its own native skeleton.
    *
-   * Cost: an extra ~55 MB FBX download. The character is rendered
-   * only during the brief jump airtime (~0.6 s), but it's loaded
-   * and lives in the scene graph for the whole game; we just toggle
-   * `visible` to swap which one renders.
+   * Gender-aware: `runner_jump_male.fbx` for male/empty/other,
+   * `runner_jump_female.fbx` for female. Disposes the previously
+   * loaded jump character before swapping so we don't leak GPU
+   * memory across gender changes.
+   *
+   * Cost: ~55 MB male / ~19 MB female FBX download per character
+   * load. Rendered only during the brief jump airtime (~0.6 s),
+   * but loaded and resident for the whole game; visibility flip
+   * swaps which one is drawn.
    */
-  private async loadJumpCharacter() {
+  private async loadJumpCharacter(gender: string) {
+    const suffix = gender === 'female' ? 'female' : 'male';
+    // No-op if we already have this gender's jump character.
+    if (this.loadedJumpGender === suffix && this.playerJumpVisual) return;
+    // Tear down any previously-loaded jump character (could be
+    // the other gender if init() flipped, or a stale instance).
+    this.disposeJumpCharacter();
+    // Stake out this load so concurrent calls for the same gender
+    // don't double-fetch and concurrent calls for the OTHER gender
+    // know to bail when this one finishes.
+    this.loadedJumpGender = suffix;
     try {
-      const fbx = await new FBXLoader().loadAsync('/models/runner_jump.fbx');
+      const fbx = await new FBXLoader().loadAsync(
+        `/models/runner_jump_${suffix}.fbx`,
+      );
+      // If gender flipped while we were loading, drop this one on
+      // the floor — the newer load is in progress.
+      if (this.loadedJumpGender !== suffix) return;
       const clip = (fbx.animations as THREE.AnimationClip[])?.[0];
       if (!clip) {
         // eslint-disable-next-line no-console
-        console.debug('[runner] jump fbx has no animations');
+        console.debug(`[runner] jump fbx (${suffix}) has no animations`);
+        this.loadedJumpGender = '';
         return;
       }
       await this.installJumpCharacter(fbx, clip);
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.debug('[runner] jump character load failed', e);
+      console.debug(`[runner] jump character (${suffix}) load failed`, e);
+      this.loadedJumpGender = '';
+    }
+  }
+
+  /**
+   * Tear down the current jump character: remove from scene,
+   * dispose mixer, dispose geometries + materials + textures.
+   * Safe to call when nothing is loaded — it's a no-op.
+   */
+  private disposeJumpCharacter() {
+    if (this.playerJumpMixer) {
+      this.playerJumpMixer.stopAllAction();
+      this.playerJumpMixer.uncacheRoot(this.playerJumpMixer.getRoot());
+      this.playerJumpMixer = undefined;
+      this.playerJumpAction = undefined;
+    }
+    if (this.playerJumpVisual) {
+      this.playerJumpVisual.removeFromParent();
+      this.playerJumpVisual.traverse((obj) => {
+        if (obj instanceof THREE.Mesh || obj instanceof THREE.SkinnedMesh) {
+          obj.geometry.dispose();
+          const m = obj.material;
+          if (Array.isArray(m)) m.forEach((mat) => this.disposeMaterial(mat));
+          else this.disposeMaterial(m);
+        }
+      });
+      this.playerJumpVisual = undefined;
     }
   }
 
@@ -835,6 +892,12 @@ export class RunnerGame {
     // Fire-and-forget. If the GLB exists, it'll swap in shortly;
     // if not, the placeholder stays and the player is none the wiser.
     this.tryLoadGltfPlayer(gender);
+    // Same pattern for the jump character — gender-aware load so
+    // the female player gets the female jump animation. Skipped
+    // (returns early) when the requested gender's jump character
+    // is already loaded, so flicking gender back and forth via
+    // init() doesn't re-fetch.
+    this.loadJumpCharacter(gender);
   }
 
   /**
