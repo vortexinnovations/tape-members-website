@@ -2121,16 +2121,32 @@ export class RunnerGame {
         // same frame.)
         const visual = cloneSkinned(gltf.scene);
 
+        // SkinnedMesh frustum culling is unreliable — its bounding
+        // sphere is computed from the bind-pose vertices and doesn't
+        // expand to account for animation. A dancing bouncer can
+        // travel well outside that sphere and get clipped to nothing.
+        // Disable per-skinned-mesh so the parent collider's draw call
+        // owns the cull decision.
+        visual.traverse((obj) => {
+          if (obj instanceof THREE.SkinnedMesh) obj.frustumCulled = false;
+        });
+
         // Auto-scale to fit the obstacle's nominal height.
         const bbox = new THREE.Box3().setFromObject(visual);
         const rawH = Math.max(0.01, bbox.max.y - bbox.min.y);
-        visual.scale.setScalar(spec.height / rawH);
+        const scaleFactor = spec.height / rawH;
+        visual.scale.setScalar(scaleFactor);
 
         // Face the camera (running player approaches from +Z) so
-        // the dance reads from the front, then drop into the
-        // collider with feet at the box's bottom.
+        // the dance reads from the front.
         visual.rotation.y = Math.PI;
-        visual.position.y = -spec.height / 2;
+
+        // Ground-align: after scaling, the model's local-space feet
+        // are at y = bbox.min.y * scaleFactor. We want feet at the
+        // bottom of the collider (y = -spec.height/2 in collider
+        // space). So shift the visual so its scaled-feet line up
+        // with the box bottom.
+        visual.position.y = -spec.height / 2 - bbox.min.y * scaleFactor;
         mesh.add(visual);
 
         // Random start offset so every bouncer is at a different
@@ -2145,6 +2161,9 @@ export class RunnerGame {
           // Advance to a random point in the loop so multiple
           // bouncers on screen aren't all in sync.
           mixer.setTime(Math.random() * clip.duration);
+          // Force one mixer evaluation so the first rendered frame
+          // shows the dance pose, not the bind pose.
+          mixer.update(0);
           return { mesh, mixer };
         }
         return { mesh };
