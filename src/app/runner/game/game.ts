@@ -149,7 +149,16 @@ export class RunnerGame {
    * mixer as the run action.
    */
   private playerJumpClip?: THREE.AnimationClip;
-  private playerJumpAction?: THREE.AnimationAction;
+  /**
+   * One AnimationAction per SkinnedMesh in the player. A Mixamo
+   * "with skin" FBX export is usually a single mesh, but body +
+   * clothes as separate skinned meshes is possible. Each action
+   * is bound with its SkinnedMesh as root so PropertyBinding
+   * uses `skeleton.getBoneByName()` (unambiguous) instead of the
+   * scene-graph name search (ambiguous — the player FBX has 5
+   * Object3Ds all named `mixamorig7Hips`).
+   */
+  private playerJumpActions: THREE.AnimationAction[] = [];
   /**
    * Edge detector — true on the frame after takeoff, until the
    * frame the player lands. Used to fire the run↔jump crossfade
@@ -862,13 +871,13 @@ export class RunnerGame {
       this.playerMixer.uncacheRoot(this.playerMixer.getRoot());
       this.playerMixer = undefined;
       this.playerRunAction = undefined;
-      // Action is mixer-owned — clearing the field is enough, the
-      // mixer's stopAllAction + uncacheRoot above already detach
-      // it. The CLIP (`playerJumpClip`) is intentionally NOT cleared
-      // here because it survives gender swaps: it's the raw clip
-      // data, prefix-agnostic until setupJumpAction retargets a
-      // fresh copy on each character load.
-      this.playerJumpAction = undefined;
+      // Actions are mixer-owned — clearing the array is enough,
+      // the mixer's stopAllAction + uncacheRoot above already
+      // detach them. The CLIP (`playerJumpClip`) is intentionally
+      // NOT cleared here because it survives gender swaps: it's
+      // the raw clip data, fresh-bound per-character by
+      // setupJumpAction.
+      this.playerJumpActions = [];
     }
     if (this.playerVisual) {
       this.playerVisual.removeFromParent();
@@ -1154,78 +1163,6 @@ export class RunnerGame {
   }
 
   /**
-   * Walk the player model, find the Hips bone, and return its
-   * prefix (e.g. `mixamorig:`, `mixamorig7:`, `Armature|`). Used
-   * to retarget the Jump clip's track names so the AnimationMixer's
-   * PropertyBinding can find each track's target bone in the
-   * player's skeleton.
-   *
-   * Returns an empty string if no Hips bone is found — caller
-   * should bail rather than retarget against a wrong/missing
-   * prefix. Defaults to `mixamorig:` if asked, but we hard-fail
-   * so a silent prefix mismatch can't accidentally hide.
-   */
-  private detectPlayerBonePrefix(model: THREE.Object3D): string {
-    let prefix = '';
-    model.traverse((obj) => {
-      if (prefix) return; // first match wins
-      if (obj instanceof THREE.Bone && /hips$/i.test(obj.name)) {
-        prefix = obj.name.replace(/Hips$/i, '');
-      }
-    });
-    return prefix;
-  }
-
-  /**
-   * Return a copy of `clip` with every track name's prefix
-   * rewritten from `fromGltfPrefix` (the COLON-STRIPPED form
-   * GLTFLoader produces) → `toFbxPrefix` (the player's actual
-   * FBX bone-name prefix, complete with the colon).
-   *
-   * Why this is more than a simple rename:
-   *
-   *   GLTFLoader runs every node name through
-   *   `PropertyBinding.sanitizeNodeName()` which strips the
-   *   reserved characters `[].:/` — so the jump GLB's bones,
-   *   which were exported as `mixamorig7:Hips`, end up named
-   *   `mixamorig7Hips` (colon gone) inside the loaded scene,
-   *   and the AnimationClip's tracks reference them as
-   *   `mixamorig7Hips.position`.
-   *
-   *   FBXLoader keeps colons intact, so the player's bones are
-   *   named `mixamorig7:Hips` (male) / `mixamorig:Hips` (female).
-   *
-   *   With those name forms diverging by one character, the
-   *   mixer's PropertyBinding can't resolve the jump clip's
-   *   tracks to any bone — every track silently no-ops and the
-   *   bones snap back to their bind pose (the Mixamo T-pose).
-   *
-   *   So even for the male character (where the underlying
-   *   prefix matches the GLB's source prefix), we MUST rewrite
-   *   the track names to re-insert the colon. The "passthrough
-   *   when prefixes match" shortcut was the bug — the original
-   *   prefixes didn't match in any case, because one had been
-   *   sanitized and the other hadn't.
-   *
-   * Tracks without the source prefix pass through unchanged.
-   * The clip is cloned defensively so the cached
-   * `playerJumpClip` isn't mutated for the next character swap.
-   */
-  private retargetClipPrefix(
-    clip: THREE.AnimationClip,
-    fromGltfPrefix: string,
-    toFbxPrefix: string,
-  ): THREE.AnimationClip {
-    const newClip = clip.clone();
-    for (const track of newClip.tracks) {
-      if (track.name.startsWith(fromGltfPrefix)) {
-        track.name = toFbxPrefix + track.name.slice(fromGltfPrefix.length);
-      }
-    }
-    return newClip;
-  }
-
-  /**
    * Attach the cached jump clip as a second action on the player's
    * existing AnimationMixer. Safe to call multiple times — bails
    * cleanly if the action already exists.
@@ -1240,80 +1177,57 @@ export class RunnerGame {
    * effectiveWeight=0 until `jump()` triggers the takeoff fade.
    */
   private setupJumpAction() {
-    if (this.playerJumpAction) return; // already wired
+    if (this.playerJumpActions.length > 0) return; // already wired
     if (!this.playerJumpClip || !this.playerMixer || !this.playerVisual) return;
 
-    // ── Diagnostics — names actually present at runtime ──
-    // BOTH FBXLoader and GLTFLoader call PropertyBinding.sanitizeNode
-    // Name() on every node name, which strips `:` along with other
-    // reserved chars. So at runtime the player's bones SHOULD be
-    // `mixamorig7Hips` (no colon) and the jump clip's tracks SHOULD
-    // be `mixamorig7Hips.position` — direct match, no rename
-    // needed. But the player still snaps to T-pose on jump, which
-    // means some name actually IS diverging somewhere. Log both
-    // sides so we can see the real shapes.
-    const playerBoneNames: string[] = [];
+    // Why this binds per-SkinnedMesh instead of per-mixer-root:
+    //
+    // The player FBX has FIVE Object3Ds named `mixamorig7Hips`
+    // (and likewise duplicates for every other bone — confirmed
+    // by a runtime diagnostic). AnimationMixer's default
+    // `clipAction(clip)` does name lookup via
+    // `findNode(mixerRoot, name)`, which returns the first
+    // depth-first match. That tends to be a sibling locator /
+    // scene-graph node rather than the SkinnedMesh's actual
+    // deforming Bone — so the track DOES bind, but to an object
+    // with zero effect on GPU skinning. Visible result: every
+    // tracked bone falls back to bind pose (T-pose) the moment
+    // run's weight drops to 0 and jump's weight comes up.
+    //
+    // Run animation works because FBXLoader wired its mixer
+    // bindings AT PARSE TIME, holding direct Bone references —
+    // it bypasses the name collision. Our externally-authored
+    // jump clip needs an explicit unambiguous resolution path.
+    //
+    // The fix: pass each SkinnedMesh as the second arg to
+    // `clipAction`. When the binding root has `.skeleton`,
+    // PropertyBinding.findNode goes through
+    // `skeleton.getBoneByName(...)` FIRST — which is the
+    // unambiguous, GPU-bound bone. For Mixamo characters with
+    // multiple skinned meshes (body + clothes), each gets its
+    // own action so every mesh's skeleton receives the pose.
+    const skinnedMeshes: THREE.SkinnedMesh[] = [];
     this.playerVisual.traverse((obj) => {
-      if (obj instanceof THREE.Bone) playerBoneNames.push(obj.name);
+      if (obj instanceof THREE.SkinnedMesh) skinnedMeshes.push(obj);
     });
-    const clipTrackNames = this.playerJumpClip.tracks.map((t) => t.name);
-    // eslint-disable-next-line no-console
-    console.log(
-      '[runner/jump] player bones (first 8):',
-      playerBoneNames.slice(0, 8),
-    );
-    // eslint-disable-next-line no-console
-    console.log(
-      '[runner/jump] clip tracks (first 8):',
-      clipTrackNames.slice(0, 8),
-    );
-    // Cross-check: every track's bone-name segment vs the player's
-    // bone name set. Report mismatches (and tally so we can tell at
-    // a glance how broken the binding is).
-    const playerSet = new Set(playerBoneNames);
-    const missing: string[] = [];
-    const matched: string[] = [];
-    for (const tn of clipTrackNames) {
-      const boneSegment = tn.split('.')[0];
-      if (playerSet.has(boneSegment)) matched.push(boneSegment);
-      else missing.push(boneSegment);
+    if (skinnedMeshes.length === 0) {
+      // eslint-disable-next-line no-console
+      console.debug(
+        '[runner/jump] no SkinnedMesh on player — cannot bind jump clip',
+      );
+      return;
     }
-    // eslint-disable-next-line no-console
-    console.log(
-      `[runner/jump] track→bone binding: ${matched.length} match, ` +
-        `${missing.length} miss. First 5 misses:`,
-      missing.slice(0, 5),
-    );
-    // Also through the Flutter bridge so the diagnostic reaches
-    // the app side without dev-tools access.
-    postToFlutter({
-      type: 'log',
-      level: 'info',
-      message:
-        `jump-bind: ${matched.length}/${clipTrackNames.length} bind ok. ` +
-        `bones[0..2]=[${playerBoneNames.slice(0, 3).join(',')}] ` +
-        `tracks[0..2]=[${clipTrackNames.slice(0, 3).join(',')}] ` +
-        `miss[0..2]=[${missing.slice(0, 3).join(',')}]`,
-    });
 
-    // No retargeting for the moment — letting GLTFLoader/FBXLoader's
-    // shared sanitizeNodeName do its job. The retargetClipPrefix
-    // helper stays around for the next investigation but is unused
-    // until we know what's actually mismatched. (Previous "always
-    // re-insert the colon" version was wrong: FBXLoader also strips
-    // colons, so both sides should land at `mixamorig7Hips` — no
-    // rewrite needed. The diagnostic above prints what's ACTUALLY
-    // on each side so we can see if anything is diverging.)
-    const retargeted = this.playerJumpClip;
-
-    const action = this.playerMixer.clipAction(retargeted);
-    action.setLoop(THREE.LoopOnce, 1);
-    action.clampWhenFinished = true; // hold last frame after the leap
-    // Pre-roll: action starts in the "playing" pool with weight 0
-    // so crossFadeTo can lerp it up without a re-prime.
-    action.play();
-    action.setEffectiveWeight(0);
-    this.playerJumpAction = action;
+    for (const mesh of skinnedMeshes) {
+      const action = this.playerMixer.clipAction(this.playerJumpClip, mesh);
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true; // hold last frame after the leap
+      // Pre-roll: action starts in the "playing" pool with weight 0
+      // so fadeIn can lerp it up without a re-prime.
+      action.play();
+      action.setEffectiveWeight(0);
+      this.playerJumpActions.push(action);
+    }
   }
 
   // ── Input ───────────────────────────────────────────────────────
@@ -1427,25 +1341,29 @@ export class RunnerGame {
    * frames sync with the actual arc.
    */
   private triggerJumpAnimation() {
-    const jumpAction = this.playerJumpAction;
+    const jumpActions = this.playerJumpActions;
     const runAction = this.playerRunAction;
-    if (!jumpAction || !runAction || !this.playerJumpClip) return;
+    if (jumpActions.length === 0 || !runAction || !this.playerJumpClip) return;
 
     const airtime = (2 * this.jumpVelocity) / Math.abs(PLAYER.GRAVITY);
     // Floor airtime defensively — if an admin set jumpVelocity to
     // 0.0001 we don't want timeScale → infinity.
     const safeAirtime = Math.max(0.2, airtime);
-    jumpAction.timeScale = this.playerJumpClip.duration / safeAirtime;
+    const timeScale = this.playerJumpClip.duration / safeAirtime;
 
-    // Restart the clip from frame 0 every jump so the takeoff
-    // pose is in sync with the moment the collider leaves the
-    // ground. crossFadeTo handles the weight lerp.
-    jumpAction.reset();
-    jumpAction.setLoop(THREE.LoopOnce, 1);
-    jumpAction.clampWhenFinished = true;
-    // 0.10s fade-in — fast enough that the takeoff feels reactive,
-    // slow enough to avoid a hard pop on the running pose.
-    runAction.crossFadeTo(jumpAction, 0.10, false);
+    // Fade run out + every jump action in. Using fadeOut/fadeIn
+    // instead of crossFadeTo because we have multiple destination
+    // actions (one per SkinnedMesh) — crossFadeTo only pairs
+    // exactly two actions at a time, but fadeOut + fadeIn run
+    // independently, so concurrent multi-target fades work.
+    runAction.fadeOut(0.10);
+    for (const action of jumpActions) {
+      action.timeScale = timeScale;
+      action.reset();
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.fadeIn(0.10);
+    }
   }
 
   /**
@@ -1558,13 +1476,15 @@ export class RunnerGame {
     // weight lerp — no re-prime needed.
     if (grounded && this.wasInAir) {
       this.wasInAir = false;
-      const jumpAction = this.playerJumpAction;
+      const jumpActions = this.playerJumpActions;
       const runAction = this.playerRunAction;
-      if (jumpAction && runAction) {
+      if (jumpActions.length > 0 && runAction) {
         // Run cycle has been looping behind weight 0 throughout
-        // the jump — no reset() needed. crossFadeTo lerps the
-        // weights over 0.10s.
-        jumpAction.crossFadeTo(runAction, 0.10, false);
+        // the jump — fade it back in while fading every jump
+        // action out. fadeIn/fadeOut handle multi-target fades
+        // independently (see triggerJumpAnimation).
+        for (const action of jumpActions) action.fadeOut(0.10);
+        runAction.fadeIn(0.10);
       }
     }
     if (!grounded) this.wasInAir = true;
