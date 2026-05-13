@@ -827,22 +827,59 @@ export class RunnerGame {
     const scale = PLAYER.HEIGHT / rawHeight;
     model.scale.setScalar(scale);
 
-    // After scaling, the model's local origin is at Mixamo's
-    // feet pivot. Re-compute the bbox and shift the model down
-    // so the feet sit at the collider's bottom (-PLAYER.HEIGHT/2
-    // in local coords).
-    const scaledBbox = new THREE.Box3().setFromObject(model);
-    const feetY = scaledBbox.min.y;
-    model.position.y = -PLAYER.HEIGHT / 2 - feetY;
-
     // Mixamo characters face +Z by default (toward camera in the
     // Mixamo preview). In our scene the camera looks toward -Z,
     // so a default-rotated character would be looking at the
     // player. We want them running INTO the screen, so face -Z.
     model.rotation.y = Math.PI;
 
-    // Parent into the collider.
+    // Parent into the collider with a rough initial position; we'll
+    // refine vertical alignment using the actual foot-bone position
+    // below, which is the only reliable signal for a SkinnedMesh
+    // (Box3.setFromObject ignores bone transforms and returns the
+    // bind-pose vertex bounds, which often don't match where the
+    // mesh actually renders).
+    model.position.y = -PLAYER.HEIGHT / 2;
     this.player.add(model);
+    model.updateMatrixWorld(true);
+
+    // Find the lowest "foot" / "toe" / "ankle" bone in the skeleton
+    // — that's where the character's feet actually appear when
+    // rendered. Mixamo names these like mixamorigLeftToeBase /
+    // mixamorigRightToeBase; we match on any bone whose name contains
+    // "toe", "foot", or "ankle" (case-insensitive) to handle other
+    // rigs too.
+    let lowestFootWorldY: number | null = null;
+    const probePos = new THREE.Vector3();
+    model.traverse((obj) => {
+      if (obj instanceof THREE.Bone) {
+        const n = obj.name.toLowerCase();
+        if (n.includes('toe') || n.includes('foot') || n.includes('ankle')) {
+          obj.getWorldPosition(probePos);
+          if (lowestFootWorldY === null || probePos.y < lowestFootWorldY) {
+            lowestFootWorldY = probePos.y;
+          }
+        }
+      }
+    });
+
+    if (lowestFootWorldY !== null) {
+      // Shift the model so the lowest foot bone sits at the ground
+      // plane (world y = 0). The collider's centre is at world
+      // y = PLAYER.BASE_Y so its bottom is at PLAYER.BASE_Y - HEIGHT/2
+      // = 0.1; we target 0 (the ground plane itself) so the character
+      // visually touches the floor.
+      const targetFootWorldY = 0;
+      const shift = targetFootWorldY - lowestFootWorldY;
+      model.position.y += shift;
+    } else {
+      // No bone names matched — fall back to using the world-space
+      // bbox after the model is in the scene. Imperfect for
+      // SkinnedMesh but better than nothing.
+      model.updateMatrixWorld(true);
+      const worldBbox = new THREE.Box3().setFromObject(model);
+      model.position.y += -worldBbox.min.y;
+    }
     this.playerVisual = model;
     this.isPlaceholderPlayer = false;
 
