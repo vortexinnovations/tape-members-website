@@ -1245,7 +1245,14 @@ export class RunnerGame {
       action.setLoop(THREE.LoopOnce, 1);
       action.clampWhenFinished = true; // hold the last frame after landing
       action.play();
-      action.setEffectiveWeight(0); // invisible until jump triggers fade-in
+      // Use `enabled = false` (NOT setEffectiveWeight(0)) to keep the
+      // action invisible until trigger. setEffectiveWeight(0) clobbers
+      // `this.weight` to 0, which then KILLS fadeIn — Three.js evaluates
+      // effective weight as `this.weight * interpolantValue`, so a
+      // 0 base times any fade ramp is still 0. Setting `enabled = false`
+      // hides the action while keeping `this.weight = 1` (the default),
+      // so a later `reset()` re-enables and the fadeIn ramp works.
+      action.enabled = false;
       this.playerJumpActions.push(action);
     }
   }
@@ -1379,10 +1386,16 @@ export class RunnerGame {
     // crossFadeTo's 1-to-1 pairing would.
     runAction.fadeOut(0.10);
     for (const action of jumpActions) {
-      action.timeScale = timeScale;
+      // reset() handles two critical things in one call:
+      //   - enabled = true (undoes our setup-time `enabled = false`,
+      //     and also undoes auto-disable from a previous jump's fadeOut)
+      //   - time = 0 (restart the clip at frame 0 of takeoff)
+      // Without reset(), `enabled` could still be false, in which
+      // case _updateWeight returns 0 regardless of fadeIn.
       action.reset();
       action.setLoop(THREE.LoopOnce, 1);
       action.clampWhenFinished = true;
+      action.timeScale = timeScale;
       action.fadeIn(0.10);
     }
   }
@@ -1500,9 +1513,15 @@ export class RunnerGame {
       const jumpActions = this.playerJumpActions;
       const runAction = this.playerRunAction;
       if (jumpActions.length > 0 && runAction) {
-        // Run cycle has been looping behind weight 0 throughout
-        // the jump — fade every jump action out + fade run back in.
+        // Fade every jump action out. Each will auto-disable
+        // itself when its interpolant reaches 0 — that's fine,
+        // the next trigger calls reset() to re-enable.
         for (const action of jumpActions) action.fadeOut(0.10);
+        // Run was auto-disabled when its fadeOut completed at
+        // jump trigger time. Re-enable BEFORE fadeIn — without
+        // this, _updateWeight returns 0 regardless of the
+        // fadeIn ramp, and the run cycle never resumes.
+        runAction.enabled = true;
         runAction.fadeIn(0.10);
       }
     }
