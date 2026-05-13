@@ -1224,44 +1224,172 @@ export class RunnerGame {
       cork.position.y = bodyH + shoulderH + neckH + corkH / 2;
       group.add(cork);
     } else {
-      // Generic bottle (water, vodka): gradual taper body + neck + cap.
-      const neckMat = new THREE.MeshStandardMaterial({
-        color: 0x141014,
-        roughness: 0.4,
-        metalness: 0.2,
-      });
-      const capMat = new THREE.MeshStandardMaterial({
-        // Blue cap for water (sports-bottle convention), silver for
-        // vodka — distinct enough to read from a distance.
-        color: spec.kind === 'water' ? 0x2b6fb3 : 0xc4c4c8,
-        roughness: 0.4,
-        metalness: 0.6,
-      });
+      // Non-champagne pickups now branch on kind so each kind has
+      // a recognisable silhouette instead of "same bottle, different
+      // cap colour".
+      if (spec.kind === 'vodkaMini') {
+        // ── Vodka shot — short squat tumbler with visible liquid.
+        const glassMat = new THREE.MeshStandardMaterial({
+          color: 0xf0f0f0,
+          roughness: 0.05,
+          metalness: 0.15,
+          transparent: true,
+          opacity: 0.40,
+        });
+        const liquidMat = new THREE.MeshStandardMaterial({
+          color: 0xf6f5ec,
+          roughness: 0.2,
+          metalness: 0.0,
+          emissive: 0xb0a890,
+          emissiveIntensity: 0.30,
+        });
+        const rimMat = new THREE.MeshStandardMaterial({
+          color: 0xe6e6ea,
+          roughness: 0.15,
+          metalness: 0.25,
+        });
+        // Shot glass: slightly tapered (top wider than base). Real
+        // shot glasses are roughly 1:1 ratio; ours is a touch taller
+        // than wide so it still reads as a glass + liquid sandwich.
+        const rTop = spec.radius * 1.05;
+        const rBottom = spec.radius * 0.78;
+        const glassH = spec.height;
+        const glass = new THREE.Mesh(
+          new THREE.CylinderGeometry(rTop, rBottom, glassH, 16),
+          glassMat,
+        );
+        glass.position.y = glassH / 2;
+        group.add(glass);
+        // Liquid sits inside the glass, fills ~65% of height.
+        const liqH = glassH * 0.65;
+        const liquid = new THREE.Mesh(
+          new THREE.CylinderGeometry(rTop * 0.90, rBottom * 0.90, liqH, 16),
+          liquidMat,
+        );
+        liquid.position.y = liqH / 2 + 0.01;
+        group.add(liquid);
+        // Rim — thin metallic torus along the top edge so the glass
+        // has visible mass even with the translucent walls.
+        const rim = new THREE.Mesh(
+          new THREE.TorusGeometry(rTop * 0.97, 0.012, 6, 18),
+          rimMat,
+        );
+        rim.rotation.x = Math.PI / 2;
+        rim.position.y = glassH * 0.99;
+        group.add(rim);
+      } else if (spec.kind === 'vodkaBottle') {
+        // ── Vodka bottle (Grey-Goose / Absolut style):
+        // straight cylindrical body + short sharp shoulder + straight
+        // narrow neck + WIDE FLAT silver screw cap.
+        const capMat = new THREE.MeshStandardMaterial({
+          color: 0xc4c4c8,
+          roughness: 0.35,
+          metalness: 0.75,
+        });
+        const bodyH = spec.height * 0.62;
+        const shoulderH = spec.height * 0.05;
+        const neckH = spec.height * 0.22;
+        const capH = spec.height * 0.11;
+        const neckR = spec.radius * 0.36;
 
-      const bodyHeight = spec.height * 0.72;
-      const body = new THREE.Mesh(
-        new THREE.CylinderGeometry(spec.radius * 0.78, spec.radius, bodyHeight, 16),
-        bodyMat,
-      );
-      body.position.y = bodyHeight / 2;
-      group.add(body);
+        // Body — no taper.
+        const body = new THREE.Mesh(
+          new THREE.CylinderGeometry(spec.radius, spec.radius, bodyH, 16),
+          bodyMat,
+        );
+        body.position.y = bodyH / 2;
+        group.add(body);
+        // Sharp shoulder — short, almost-angular taper.
+        const shoulder = new THREE.Mesh(
+          new THREE.CylinderGeometry(neckR, spec.radius, shoulderH, 16),
+          bodyMat,
+        );
+        shoulder.position.y = bodyH + shoulderH / 2;
+        group.add(shoulder);
+        // Straight neck — no taper.
+        const neck = new THREE.Mesh(
+          new THREE.CylinderGeometry(neckR, neckR, neckH, 12),
+          bodyMat,
+        );
+        neck.position.y = bodyH + shoulderH + neckH / 2;
+        group.add(neck);
+        // Wide flat screw cap — squat, much wider than neck.
+        const cap = new THREE.Mesh(
+          new THREE.CylinderGeometry(neckR * 1.30, neckR * 1.30, capH, 12),
+          capMat,
+        );
+        cap.position.y = bodyH + shoulderH + neckH + capH / 2;
+        group.add(cap);
+      } else {
+        // ── Water sport bottle: curvy body + smooth shoulder +
+        // short neck + DOMED pull-cap. The shape is the main
+        // differentiator from the vodka bottle.
+        const capMat = new THREE.MeshStandardMaterial({
+          color: 0x2b6fb3,
+          roughness: 0.4,
+          metalness: 0.30,
+        });
+        const bottomH = spec.height * 0.30;
+        const topH = spec.height * 0.32;
+        const shoulderH = spec.height * 0.10;
+        const neckH = spec.height * 0.10;
+        const capBaseH = spec.height * 0.10;
+        const capDomeH = spec.height * 0.08;
+        const neckR = spec.radius * 0.42;
 
-      const neckHeight = spec.height * 0.22;
-      const neckRadius = spec.radius * 0.30;
-      const neck = new THREE.Mesh(
-        new THREE.CylinderGeometry(neckRadius * 0.85, neckRadius, neckHeight, 12),
-        neckMat,
-      );
-      neck.position.y = bodyHeight + neckHeight / 2;
-      group.add(neck);
-
-      const capHeight = spec.height * 0.06;
-      const cap = new THREE.Mesh(
-        new THREE.CylinderGeometry(neckRadius * 1.05, neckRadius * 0.95, capHeight, 12),
-        capMat,
-      );
-      cap.position.y = bodyHeight + neckHeight + capHeight / 2;
-      group.add(cap);
+        // Lower body — slight inward taper at the base.
+        const bottom = new THREE.Mesh(
+          new THREE.CylinderGeometry(spec.radius, spec.radius * 0.85, bottomH, 16),
+          bodyMat,
+        );
+        bottom.position.y = bottomH / 2;
+        group.add(bottom);
+        // Upper body — slight outward taper for the curvy silhouette.
+        const top = new THREE.Mesh(
+          new THREE.CylinderGeometry(spec.radius * 0.95, spec.radius, topH, 16),
+          bodyMat,
+        );
+        top.position.y = bottomH + topH / 2;
+        group.add(top);
+        // Smooth shoulder — generous taper down to a wider neck.
+        const shoulder = new THREE.Mesh(
+          new THREE.CylinderGeometry(neckR, spec.radius * 0.95, shoulderH, 16),
+          bodyMat,
+        );
+        shoulder.position.y = bottomH + topH + shoulderH / 2;
+        group.add(shoulder);
+        // Short neck (wide opening for sport drinking).
+        const neck = new THREE.Mesh(
+          new THREE.CylinderGeometry(neckR, neckR, neckH, 12),
+          bodyMat,
+        );
+        neck.position.y = bottomH + topH + shoulderH + neckH / 2;
+        group.add(neck);
+        // Cap base — wider than the neck, blue plastic.
+        const capBase = new THREE.Mesh(
+          new THREE.CylinderGeometry(neckR * 1.10, neckR * 1.10, capBaseH, 12),
+          capMat,
+        );
+        capBase.position.y =
+          bottomH + topH + shoulderH + neckH + capBaseH / 2;
+        group.add(capBase);
+        // Dome top — half-sphere for the sport flip-cap profile.
+        const dome = new THREE.Mesh(
+          new THREE.SphereGeometry(neckR * 0.85, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+          capMat,
+        );
+        dome.position.y =
+          bottomH + topH + shoulderH + neckH + capBaseH + 0.005;
+        group.add(dome);
+        // Tiny pull-spout on the dome.
+        const spout = new THREE.Mesh(
+          new THREE.CylinderGeometry(neckR * 0.18, neckR * 0.22, capDomeH * 0.55, 8),
+          capMat,
+        );
+        spout.position.y =
+          bottomH + topH + shoulderH + neckH + capBaseH + capDomeH * 0.30;
+        group.add(spout);
+      }
     }
 
     // Methuselah halo — emissive ring around the body. Sells the
@@ -1493,7 +1621,145 @@ export class RunnerGame {
       return mesh;
     }
 
-    // Default — bouncer + any future floor obstacles. Plain box.
+    if (spec.kind === 'bouncer') {
+      // Bouncer — broad-shouldered humanoid in a dark suit with
+      // arms crossed in front. The collider stays a simple
+      // invisible Box (spec.width × spec.height × spec.depth) so
+      // intersectsPlayer's AABB math is unchanged.
+      const colliderGeo = new THREE.BoxGeometry(
+        spec.width,
+        spec.height,
+        spec.depth,
+      );
+      const colliderMat = new THREE.MeshBasicMaterial({ visible: false });
+      const mesh = new THREE.Mesh(colliderGeo, colliderMat);
+
+      const W = spec.width;
+      const H = spec.height;
+
+      // Suit — near-black with the faintest cool tint so it doesn't
+      // crush to pure 0,0,0 against the dark fog.
+      const suitMat = new THREE.MeshStandardMaterial({
+        color: 0x0a0d14,
+        roughness: 0.55,
+        metalness: 0.15,
+      });
+      const skinMat = new THREE.MeshStandardMaterial({
+        color: 0xc8a070,
+        roughness: 0.6,
+        metalness: 0.0,
+      });
+      const hairMat = new THREE.MeshStandardMaterial({
+        color: 0x080604,
+        roughness: 0.8,
+        metalness: 0.05,
+      });
+      const shoeMat = new THREE.MeshStandardMaterial({
+        color: 0x050505,
+        roughness: 0.35,
+        metalness: 0.3,
+      });
+
+      const visual = new THREE.Group();
+
+      // Torso — broad capsule. Wider than the player's so the
+      // bouncer reads as imposing.
+      const torsoH = H * 0.50;
+      const torsoR = W * 0.32;
+      const torso = new THREE.Mesh(
+        new THREE.CapsuleGeometry(torsoR, torsoH * 0.65, 4, 14),
+        suitMat,
+      );
+      torso.position.y = H * 0.50;
+      visual.add(torso);
+
+      // Head — slightly tucked into the shoulders for the "no neck"
+      // bouncer silhouette.
+      const headR = W * 0.18;
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(headR, 14, 12),
+        skinMat,
+      );
+      head.position.y = H * 0.82;
+      visual.add(head);
+
+      // Hair — close-cropped flat cap.
+      const hair = new THREE.Mesh(
+        new THREE.SphereGeometry(
+          headR * 0.95,
+          12,
+          8,
+          0,
+          Math.PI * 2,
+          0,
+          Math.PI / 2,
+        ),
+        hairMat,
+      );
+      hair.position.y = H * 0.83;
+      visual.add(hair);
+
+      // Crossed arms — two horizontal capsules over the chest,
+      // offset slightly forward (+Z) so they read as "in front
+      // of" the torso. The lower arm is shifted ~5cm down so the
+      // pair looks crossed instead of stacked.
+      const armLen = W * 0.45;
+      const armR = W * 0.10;
+      const armGeo = new THREE.CapsuleGeometry(armR, armLen * 0.55, 3, 10);
+      const upperArm = new THREE.Mesh(armGeo, suitMat);
+      upperArm.rotation.z = Math.PI / 2;
+      upperArm.position.set(0, H * 0.55, torsoR * 0.85);
+      visual.add(upperArm);
+      const lowerArm = new THREE.Mesh(armGeo, suitMat);
+      lowerArm.rotation.z = Math.PI / 2;
+      lowerArm.position.set(0, H * 0.50, torsoR * 0.92);
+      visual.add(lowerArm);
+
+      // Legs — slim suit trousers below the torso.
+      const legH = H * 0.36;
+      const legR = W * 0.13;
+      const legGeo = new THREE.CapsuleGeometry(legR, legH * 0.65, 3, 10);
+      const legOffsetX = W * 0.16;
+      const legY = H * 0.18;
+      const legL = new THREE.Mesh(legGeo, suitMat);
+      legL.position.set(-legOffsetX, legY, 0);
+      visual.add(legL);
+      const legR_ = new THREE.Mesh(legGeo, suitMat);
+      legR_.position.set(legOffsetX, legY, 0);
+      visual.add(legR_);
+
+      // Polished dress shoes.
+      const shoeGeo = new THREE.BoxGeometry(W * 0.16, 0.07, W * 0.26);
+      const shoeL = new THREE.Mesh(shoeGeo, shoeMat);
+      shoeL.position.set(-legOffsetX, 0.035, W * 0.06);
+      visual.add(shoeL);
+      const shoeR = new THREE.Mesh(shoeGeo, shoeMat);
+      shoeR.position.set(legOffsetX, 0.035, W * 0.06);
+      visual.add(shoeR);
+
+      // Earpiece — tiny dark sphere on the right side of the head
+      // with a thin curling wire down to the collar. The wire is
+      // a slightly bent capsule; for placeholder geometry we just
+      // use a short cylinder offset to suggest the cable.
+      const earpiece = new THREE.Mesh(
+        new THREE.SphereGeometry(0.025, 8, 8),
+        new THREE.MeshStandardMaterial({
+          color: 0x121212,
+          roughness: 0.4,
+          metalness: 0.5,
+        }),
+      );
+      earpiece.position.set(headR * 0.92, H * 0.82, headR * 0.3);
+      visual.add(earpiece);
+
+      // Visual group is parented to the collider mesh. Offset down
+      // by half the collider height so feet sit on the ground.
+      visual.position.y = -H / 2;
+      mesh.add(visual);
+      return mesh;
+    }
+
+    // Fallback — any future floor obstacle without specific geometry.
     const geo = new THREE.BoxGeometry(spec.width, spec.height, spec.depth);
     const mat = new THREE.MeshStandardMaterial({
       color: spec.color,
