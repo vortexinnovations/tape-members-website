@@ -245,7 +245,7 @@ export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
     failReason: 'bouncerHit',
     visualRotationY: 0,
     visualScale: 2.0,
-    visualOffsetY: -1.0,
+    visualOffsetY: -1.1,
   },
   discoBall: {
     kind: 'discoBall',
