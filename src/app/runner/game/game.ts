@@ -687,6 +687,14 @@ export class RunnerGame {
     // so the whole effect is one draw call.
     this.buildLEDCeiling();
 
+    // ── Horizon sign ───────────────────────────────────────────
+    // "ALL ROADS LEAD TO TAPE" rendered in the Embossing Tape font
+    // on a plane far down the runway. Static (no scroll group), so
+    // it sits in the visual horizon while the world streams past.
+    // Async because the font is fetched at runtime via FontFace;
+    // the sign pops in once it lands (fire-and-forget).
+    void this.buildHorizonSign();
+
     // ── TAPE dancer podiums ────────────────────────────────────
     // Tall slim columns with vertical red LED edge strips, mounted
     // just past the rope on alternating sides. Pure Tape London
@@ -1408,6 +1416,102 @@ export class RunnerGame {
    * cheaper than InstancedMesh of 8,000 disc geometries — the
    * GPU does everything in the fragment shader.
    */
+  /**
+   * "ALL ROADS LEAD TO TAPE" sign at the far end of the visible
+   * runway. Stays in the horizon — not added to any scroll pool,
+   * so the world streams past it while the sign visually sits
+   * unmoving in the distance, mimicking real road signage.
+   *
+   * Built as a CanvasTexture mapped onto a plane: the Embossing
+   * Tape font (weight 800 = embossing-tape-3.ttf) is loaded
+   * asynchronously via FontFace from /public/fonts/, then the
+   * text is rendered into a high-resolution 2048×512 canvas with
+   * a red glow for the neon-on-distant-sign feel. The plane
+   * faces the camera (default plane normal = +Z, camera is at
+   * +Z relative to the sign at z = -180) and sits at z = -180,
+   * just inside the camera's far clip (200).
+   *
+   * Async because the font fetch is async — caller fires-and-
+   * forgets. If the font fails to load the canvas falls back to
+   * a generic sans-serif (still legible, just not on-brand).
+   */
+  private async buildHorizonSign() {
+    // 1. Load the Embossing Tape font directly via the FontFace
+    //    API. Next.js's next/font/local already loads this font
+    //    for HTML elements via a hashed family name, but canvas
+    //    drawing needs a known family name that we can reference
+    //    in the font-string. Putting our own copy in /public/
+    //    sidesteps the next/font hashing entirely.
+    const FONT_FAMILY = 'TapeRunnerSign';
+    try {
+      const face = new FontFace(
+        FONT_FAMILY,
+        'url(/fonts/embossing-tape-3.ttf)',
+      );
+      await face.load();
+      (document.fonts as FontFaceSet).add(face);
+    } catch (e) {
+      // Font fetch failed — fall through with default font. The
+      // sign will still render readably, just generic.
+      // eslint-disable-next-line no-console
+      console.debug('[runner] horizon-sign font load failed', e);
+    }
+
+    // 2. Render the text onto a high-res canvas. Two passes of
+    //    fillText() on top of each other to deepen the red glow
+    //    without resorting to multiple draw calls (one canvas =
+    //    one texture upload).
+    const PIXEL_W = 2048;
+    const PIXEL_H = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = PIXEL_W;
+    canvas.height = PIXEL_H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return; // wildly unlikely; bail rather than crash
+    // Transparent background — only the text itself paints.
+    ctx.clearRect(0, 0, PIXEL_W, PIXEL_H);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `200px "${FONT_FAMILY}", sans-serif`;
+    // Red neon glow — shadow is drawn before the fill, so a
+    // double-fill effectively layers the glow.
+    ctx.shadowColor = '#ff3050';
+    ctx.shadowBlur = 28;
+    ctx.fillStyle = '#ff5060';
+    ctx.fillText('ALL ROADS LEAD TO TAPE', PIXEL_W / 2, PIXEL_H / 2);
+    // Second pass with brighter core for a pop of bright on top
+    // of the diffuse outer glow.
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = '#ffd6d8';
+    ctx.fillText('ALL ROADS LEAD TO TAPE', PIXEL_W / 2, PIXEL_H / 2);
+
+    // 3. Build the mesh.
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    tex.needsUpdate = true;
+
+    const SIGN_W = 14;
+    const SIGN_H = SIGN_W * (PIXEL_H / PIXEL_W); // ~3.5 m
+    const geo = new THREE.PlaneGeometry(SIGN_W, SIGN_H);
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+      // Premultiplied keeps the glow halo clean against the dark
+      // background (no dark fringe around the text edges).
+      premultipliedAlpha: false,
+    });
+
+    const sign = new THREE.Mesh(geo, mat);
+    // Far down the runway, centred in the lane, eye-level so it
+    // sits on the horizon line. Z = -180 is well inside the
+    // camera's 200 m far-clip (camera at z = 8 → distance 188 m).
+    sign.position.set(0, 4.5, -180);
+    this.scene.add(sign);
+  }
+
   private buildLEDCeiling() {
     const CEILING_W = 16;        // wide enough to span runway + podiums
     const CEILING_LENGTH = 200;  // matches ground length
