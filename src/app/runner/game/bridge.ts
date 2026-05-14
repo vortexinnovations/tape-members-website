@@ -102,6 +102,29 @@ export type InitPayload = {
     speakerWeight?: number;
     bouncerWeight?: number;
     discoBallWeight?: number;
+    // ── Sound effects (Three.js only) ───────────────────────────
+    /**
+     * Admin master switch for SFX. When false:
+     *   • play() is a no-op
+     *   • the HUD mute button is hidden entirely (no point letting
+     *     users toggle a feature that's off at the source)
+     * Default true.
+     */
+    sfxEnabled?: boolean;
+    /** Master volume 0..1. Default 1.0. Clamped game-side. */
+    sfxVolume?: number;
+    /**
+     * Per-event SFX URLs. Each key is independent; an empty/missing
+     * URL means "admin hasn't configured this SFX, play silently."
+     * URLs typically point at MP3/AAC files hosted on Firebase
+     * Storage or any public CDN. Asset names match the convention
+     * documented on RunnerSettingsRecord.assetUrls.
+     */
+    sfxJumpUrl?: string;
+    sfxPickupUrl?: string;
+    sfxWaterUrl?: string;
+    sfxComboUrl?: string;
+    sfxGameOverUrl?: string;
     // ── Game-over copy overrides (Three.js only) ────────────────
     // Each pair (headline + subtitle) overrides the built-in
     // DEATH_COPY default for that death reason. The web sends the

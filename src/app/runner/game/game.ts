@@ -33,6 +33,7 @@ import {
   type PlayerGender,
 } from './bridge';
 import { Buzz } from './buzz';
+import { AudioManager } from './audio';
 import { HUD } from './hud';
 import {
   COMBO,
@@ -321,6 +322,13 @@ export class RunnerGame {
 
   // HUD overlay (DOM) — created on construction, owns vignette + counters.
   private hud: HUD;
+  /**
+   * Audio manager — preloads SFX, plays on events, owns master
+   * mute + volume. Created on construction; URLs are loaded later
+   * once Flutter's `init()` bridge call delivers admin settings.
+   * Until URLs arrive every play() is silent (no harm done).
+   */
+  private audio = new AudioManager();
 
   // Buzz + combo + score state
   private buzz = new Buzz();
@@ -437,6 +445,20 @@ export class RunnerGame {
     // a DOM overlay independent of the WebGL scene, so it's safe
     // to construct it this early.
     this.hud = new HUD(canvas);
+
+    // ── Audio ↔ HUD handshake ───────────────────────────────────
+    // HUD owns the mute button DOM; AudioManager owns the actual
+    // mute state. Tap → toggle → notify back via onMuteChanged.
+    // Initial icon reflects the localStorage-persisted preference
+    // already loaded by AudioManager's constructor.
+    this.hud.onMuteToggle = () => this.audio.toggleMute();
+    this.audio.onMuteChanged = (muted) => this.hud.setMuteIcon(muted);
+    this.hud.setMuteIcon(this.audio.muted);
+    // Button is hidden until init() arrives with sfxEnabled. Admin
+    // master switch defaults true so the button shows up once
+    // settings load.
+    this.hud.setMuteVisible(false);
+
     this.buildScene();
     this.attachInput();
     this.attachResize();
@@ -2331,6 +2353,7 @@ export class RunnerGame {
     if (this.playerY > PLAYER.BASE_Y + 0.05) return; // already airborne
     this.playerVy = this.jumpVelocity;
     this.triggerJumpAnimation();
+    this.audio.play('jump');
   }
 
   /**
@@ -3790,8 +3813,10 @@ export class RunnerGame {
       this.watersUsed++;
       // Water doesn't extend combo (no score from it).
       this.hud.flashPickup(spec, 0);
+      this.audio.play('water');
     } else {
       // Combo bump + score with multiplier.
+      const prevMult = this.getComboMultiplier(this.combo);
       this.combo++;
       this.peakCombo = Math.max(this.peakCombo, this.combo);
       this.comboTimer = 0;
@@ -3802,6 +3827,14 @@ export class RunnerGame {
       this.bottlesCollected++;
       this.hud.flashPickup(spec, earned);
       this.hud.setCombo(this.combo, mult);
+      // Tier transition (multiplier jumped) gets the combo SFX —
+      // otherwise it's just a regular pickup ding. Avoids spamming
+      // the celebratory sound on every bottle inside a tier.
+      if (mult > prevMult) {
+        this.audio.play('combo');
+      } else {
+        this.audio.play('pickup');
+      }
       // Last — apply the buzz delta. If we were already at max, this
       // is the bottle that tips us over → blackout.
       const blackedOut = this.buzz.add(spec.buzzDelta);
@@ -3999,6 +4032,25 @@ export class RunnerGame {
         this.ambientLight.intensity = this.ambientBaseIntensity * b;
         this.houseLight.intensity = this.houseBaseIntensity * b;
       }
+
+      // ── Sound effects ──────────────────────────────────────
+      // Master switch + volume. Default sfxEnabled = true so an
+      // unseeded doc still ships sound (if URLs are also set);
+      // explicit false hides the HUD mute button AND silences play().
+      const sfxEnabled = s.sfxEnabled !== false;
+      this.audio.setEnabledByAdmin(sfxEnabled);
+      this.hud.setMuteVisible(sfxEnabled);
+      if (typeof s.sfxVolume === 'number' && Number.isFinite(s.sfxVolume)) {
+        this.audio.setMasterVolume(s.sfxVolume);
+      }
+      // Per-event URLs. Empty / missing strings drop any existing
+      // pool for that key (silent fallback). The AudioManager
+      // skips re-loading if the URL hasn't changed.
+      if (typeof s.sfxJumpUrl === 'string') this.audio.load('jump', s.sfxJumpUrl);
+      if (typeof s.sfxPickupUrl === 'string') this.audio.load('pickup', s.sfxPickupUrl);
+      if (typeof s.sfxWaterUrl === 'string') this.audio.load('water', s.sfxWaterUrl);
+      if (typeof s.sfxComboUrl === 'string') this.audio.load('combo', s.sfxComboUrl);
+      if (typeof s.sfxGameOverUrl === 'string') this.audio.load('gameover', s.sfxGameOverUrl);
 
       // ── Combo tier overrides ───────────────────────────────
       // Three tiers above the baseline (which is always 0/×1.0).
@@ -4329,6 +4381,10 @@ export class RunnerGame {
     this.running = false;
     // Drop the buzz blur overlay so the fall animation reads crisp.
     this.hud.setBlur(0);
+    // Fire the game-over SFX immediately — independent of whether
+    // the fall animation plays. Plays once even if endGame is called
+    // re-entrantly (gameOver latch above guards against that).
+    this.audio.play('gameover');
     const copy = this.resolveDeathCopy(reason);
     // Build the payload now so all per-run counters (score, distance,
     // peak combo/buzz, etc.) reflect the moment the run ended, not
@@ -4413,6 +4469,7 @@ export class RunnerGame {
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     this.resizeObserver?.disconnect();
     this.hud.dispose();
+    this.audio.dispose();
     // Tear down the player visual + AnimationMixer + any loaded
     // GLB textures BEFORE the scene-wide traverse so the mixer's
     // bone references are released cleanly.

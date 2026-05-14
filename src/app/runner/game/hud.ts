@@ -21,6 +21,17 @@ export class HUD {
   private root: HTMLDivElement;
   private scoreEl: HTMLDivElement;
   private distEl: HTMLDivElement;
+  /**
+   * Top-left mute toggle. Hidden when the admin has SFX disabled
+   * entirely. The icon flips between speaker / speaker-slash based
+   * on the player's localStorage-persisted preference.
+   *
+   * Positioned at top-left (NOT top-right) because the Flutter
+   * WebView wrapper overlays a close button at top-right on mobile.
+   */
+  private muteBtn: HTMLDivElement;
+  /** Caller wires this so HUD button taps reach the AudioManager. */
+  onMuteToggle?: () => void;
   /** Outer wrapper for the combo readout — owns the opacity +
    *  scale transition. Contains two child rows: the big multiplier
    *  pill and the small "N in a row" caption. */
@@ -201,6 +212,45 @@ export class HUD {
     // (No spacer / no right-side element in the top row anymore —
     // the buzz meter and combo chip both live at the bottom now,
     // so the top row is purely the centred score column.)
+
+    // ── Mute button (top-left) ──────────────────────────────────
+    // Absolutely positioned at top-left of the HUD root, respecting
+    // the safe-area inset. NOT top-right because the Flutter
+    // WebView wraps a close button there on mobile. Size 40 px so
+    // it meets Apple's 44 pt touch-target guideline once the 4 px
+    // visual padding is accounted for.
+    this.muteBtn = document.createElement('div');
+    Object.assign(this.muteBtn.style, {
+      position: 'absolute',
+      top: 'max(env(safe-area-inset-top), 16px)',
+      left: 'max(env(safe-area-inset-left), 16px)',
+      width: '40px',
+      height: '40px',
+      borderRadius: '20px',
+      background: 'rgba(0, 0, 0, 0.4)',
+      backdropFilter: 'blur(10px)',
+      display: 'none', // hidden by default; setMuteVisible flips it on
+      alignItems: 'center',
+      justifyContent: 'center',
+      pointerEvents: 'auto',
+      cursor: 'pointer',
+      // Stack above other overlays so taps don't miss it. Below the
+      // pickup-name flash (which is at z-index 10).
+      zIndex: '5',
+      transition: 'background 0.15s ease',
+    } satisfies Partial<CSSStyleDeclaration>);
+    this.muteBtn.style.setProperty(
+      '-webkit-backdrop-filter',
+      'blur(10px)',
+    );
+    // Default to "unmuted" icon — wireSetMuted updates it once the
+    // AudioManager has loaded its localStorage preference.
+    this.muteBtn.innerHTML = this._speakerSvg(false);
+    this.muteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.onMuteToggle?.();
+    });
+    this.root.appendChild(this.muteBtn);
 
     // Combo readout — absolutely positioned below the character so
     // it's right in the player's field of view during gameplay,
@@ -691,6 +741,33 @@ export class HUD {
     this.vignetteEl.remove();
     this.blurOverlayEl.remove();
     this.inputHintEl.remove();
+  }
+
+  /** Show or hide the top-left mute button. Hide when the admin
+   *  has SFX entirely disabled — no point letting users toggle a
+   *  feature that's off at the source. */
+  setMuteVisible(visible: boolean): void {
+    this.muteBtn.style.display = visible ? 'flex' : 'none';
+  }
+
+  /** Update the speaker icon to reflect the current mute state.
+   *  Called when AudioManager.onMuteChanged fires (which happens
+   *  on user toggle OR admin enabling/disabling). */
+  setMuteIcon(muted: boolean): void {
+    this.muteBtn.innerHTML = this._speakerSvg(muted);
+  }
+
+  /** Inline SVG for the speaker / speaker-slash icon. Stroke +
+   *  fill use `currentColor` so the icon picks up the HUD text
+   *  colour. 22 × 22 viewBox fits cleanly inside the 40 px circle
+   *  with room to breathe. */
+  private _speakerSvg(muted: boolean): string {
+    if (muted) {
+      // Speaker with a slash through it — muted state.
+      return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.85"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>`;
+    }
+    // Speaker with two sound waves — unmuted.
+    return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
   }
 }
 
