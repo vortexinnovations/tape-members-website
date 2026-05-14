@@ -189,6 +189,14 @@ export interface ObstacleSpec {
    * obstacle. Defaults to 1.0.
    */
   visualScale?: number;
+  /**
+   * Manual Y-offset applied to the visual AFTER feet-on-collider-
+   * floor alignment. Defaults to 0. Use to nudge a model whose
+   * bone-based foot detection placed it slightly wrong (rig with
+   * non-standard bone naming, props that confuse the lowest-Y
+   * search, etc.). Negative = move down, positive = move up.
+   */
+  visualOffsetY?: number;
 }
 
 export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
@@ -237,6 +245,7 @@ export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
     failReason: 'bouncerHit',
     visualRotationY: 0,
     visualScale: 2.0,
+    visualOffsetY: -1.0,
   },
   discoBall: {
     kind: 'discoBall',

@@ -4104,6 +4104,10 @@ export class RunnerGame {
           // No foot bones matched — fall back to half-height shift.
           visual.position.y = -spec.height / 2;
         }
+        // Per-spec manual Y nudge for models whose bone-based foot
+        // alignment lands them slightly wrong (e.g. the bouncer
+        // floats without a -1 m offset).
+        visual.position.y += spec.visualOffsetY ?? 0;
 
         // Random start offset so every bouncer is at a different
         // point in the dance loop. Otherwise the lineup of
