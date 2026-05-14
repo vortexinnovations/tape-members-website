@@ -1660,6 +1660,8 @@ export class RunnerGame {
   private async loadDancerVisuals() {
     try {
       // ── Fetch all four assets in parallel ───────────────────
+      // eslint-disable-next-line no-console
+      console.log('[dancer] starting fetch of 5 assets');
       const [meshGltf, animGltf, joints0, weights0, meta] = await Promise.all([
         new GLTFLoader().loadAsync('/models/dancer_female.glb'),
         new GLTFLoader().loadAsync('/models/dance_anim.glb'),
@@ -1672,6 +1674,15 @@ export class RunnerGame {
           bones: string[];
         }>,
       ]);
+      // eslint-disable-next-line no-console
+      console.log('[dancer] all 5 fetches done', {
+        meshChildren: meshGltf.scene.children.length,
+        animChildren: animGltf.scene.children.length,
+        animClips: animGltf.animations.length,
+        joints0Bytes: joints0.byteLength,
+        weights0Bytes: weights0.byteLength,
+        meta,
+      });
 
       // ── Extract the source mesh from the static GLB ─────────
       let sourceMesh: THREE.Mesh | null = null;
@@ -1680,16 +1691,24 @@ export class RunnerGame {
         if (obj instanceof THREE.Mesh) sourceMesh = obj;
       });
       if (!sourceMesh) {
-        console.debug('[runner] dancer mesh has no Mesh child');
+        // eslint-disable-next-line no-console
+        console.warn('[dancer] mesh GLB has no Mesh child');
         return;
       }
       const sm = sourceMesh as THREE.Mesh;
+      // eslint-disable-next-line no-console
+      console.log('[dancer] found source mesh', {
+        name: sm.name,
+        vertCount: sm.geometry.getAttribute('position').count,
+        hasMaterial: !!sm.material,
+      });
 
       // ── Verify vertex count matches the weights ─────────────
       const positionAttr = sm.geometry.getAttribute('position');
       if (positionAttr.count !== meta.vertCount) {
-        console.debug(
-          `[runner] dancer vert count mismatch: mesh=${positionAttr.count} weights=${meta.vertCount}`,
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[dancer] vert count mismatch: mesh=${positionAttr.count} weights=${meta.vertCount}`,
         );
         return;
       }
@@ -1759,10 +1778,18 @@ export class RunnerGame {
             }
           });
           if (!found) {
-            console.debug(`[runner] missing bone: ${boneName}`);
+            // eslint-disable-next-line no-console
+            console.warn(`[dancer] missing bone: ${boneName}`);
             return; // bail — incomplete skeleton can't drive the mesh
           }
           bones.push(found);
+        }
+        if (i === 0) {
+          // eslint-disable-next-line no-console
+          console.log('[dancer] resolved all 20 bones for podium 0', {
+            firstBone: bones[0].name,
+            firstBoneType: bones[0].type,
+          });
         }
 
         // Compute inverse bind matrices from the bones' CURRENT
@@ -1820,9 +1847,11 @@ export class RunnerGame {
           sideSign,
         });
       }
+      // eslint-disable-next-line no-console
+      console.log(`[dancer] assembled ${this.dancerVisuals.length} dancers`);
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.debug('[runner] dancer assembly failed', e);
+      console.error('[dancer] assembly failed', e);
     }
   }
 
