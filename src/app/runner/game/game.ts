@@ -335,6 +335,15 @@ export class RunnerGame {
   }[] = [];
 
   /**
+   * Tape London's signature LED ceiling — single plane, custom
+   * shader that procedurally renders a grid of bright circular
+   * dots and animates per-cell colour through pink → purple →
+   * blue → red on a moving wave. Kept as a ref so the update
+   * loop can tick its `uTime` uniform.
+   */
+  private ledCeilingMat?: THREE.ShaderMaterial;
+
+  /**
    * Cached canvas-texture used as the glowing shield badge on every
    * champagne / magnum / methuselah pickup. Lazily built on the
    * first champagne spawn; reused for the lifetime of the game,
@@ -661,6 +670,13 @@ export class RunnerGame {
     // scrolls like the stripes and recycles when units pass
     // the camera.
     this.buildVelvetRopes();
+
+    // ── LED ceiling ────────────────────────────────────────────
+    // Tape London's signature dense grid of small circular LEDs
+    // overhead — pink/purple/blue/red cycling through patterns.
+    // One plane with a shader that draws ~8,000 dots procedurally,
+    // so the whole effect is one draw call.
+    this.buildLEDCeiling();
 
     // ── TAPE dancer podiums ────────────────────────────────────
     // Tall slim columns with vertical red LED edge strips, mounted
@@ -1367,6 +1383,129 @@ export class RunnerGame {
    * is interleaved (L0, R0, L1, R1, ...) in `velvetRopes` so
    * one update-loop pass scrolls both rows together.
    */
+  /**
+   * Build the LED ceiling — Tape London's iconic dense grid of
+   * small circular lights overhead, colour-cycling through pink
+   * / purple / blue / red on a moving wave.
+   *
+   * Implementation: one big horizontal plane, custom shader
+   * that procedurally renders a 40×200 grid of dots (~8,000
+   * lights) in a single draw call. Per-cell phase varies with
+   * (x, y, time) so adjacent cells are never the same colour
+   * and the row of cells reads as a flowing pattern travelling
+   * along the runway.
+   *
+   * Performance: a ShaderMaterial on a single plane is much
+   * cheaper than InstancedMesh of 8,000 disc geometries — the
+   * GPU does everything in the fragment shader.
+   */
+  private buildLEDCeiling() {
+    const CEILING_W = 16;        // wide enough to span runway + podiums
+    const CEILING_LENGTH = 200;  // matches ground length
+    const CEILING_Y = 6.0;       // above cage tops (3.5 m) + headroom
+    const CEILING_Z = -90;       // matches ground centre
+
+    // Grid resolution — 40 dots across × 200 along ≈ 8,000 lights.
+    // Aspect roughly matches the world space (4 dots/m × 4 dots/m)
+    // so dots stay round in world-space units.
+    const GRID_X = 40;
+    const GRID_Y = 200;
+
+    const geo = new THREE.PlaneGeometry(CEILING_W, CEILING_LENGTH);
+    // PlaneGeometry's default normal is +Z. Rotate -π/2 around X
+    // to lay it flat with the normal pointing DOWN (−Y) — the
+    // emissive side faces the player below.
+    geo.rotateX(-Math.PI / 2);
+
+    const vertexShader = /* glsl */ `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+
+    // 4-anchor hue cycle in the fragment shader — same anchors as
+    // the JS `cycleLEDColor` helper for podium LEDs, so the
+    // ceiling matches the podiums visually.
+    const fragmentShader = /* glsl */ `
+      uniform float uTime;
+      uniform float uBrightness;
+      uniform vec2 uGrid;
+      varying vec2 vUv;
+
+      vec3 cycleHue(float phase) {
+        float p = fract(phase);
+        float seg = p * 4.0;
+        float idx = floor(seg);
+        float t = seg - idx;
+        vec3 colors[4];
+        colors[0] = vec3(1.00, 0.20, 0.55);   // pink
+        colors[1] = vec3(0.55, 0.10, 0.95);   // purple
+        colors[2] = vec3(0.15, 0.30, 1.00);   // blue
+        colors[3] = vec3(1.00, 0.10, 0.15);   // red
+        int i = int(idx);
+        int j = int(mod(idx + 1.0, 4.0));
+        vec3 a = colors[i];
+        vec3 b = colors[j];
+        return mix(a, b, t);
+      }
+
+      void main() {
+        vec2 cell = vUv * uGrid;
+        vec2 cellId = floor(cell);
+        vec2 local = fract(cell) - 0.5;
+        float d = length(local);
+        // Sharp dot with anti-aliased edge
+        float dotMask = smoothstep(0.32, 0.26, d);
+
+        // Phase = position-walk along Z + a slow time sweep + a
+        // wider sinusoidal "wave" so colour cascades along the
+        // ceiling rather than changing uniformly.
+        float wave =
+          sin(uTime * 0.5 + cellId.y * 0.18 + cellId.x * 0.07) * 0.5 + 0.5;
+        float phase =
+          uTime * 0.05 +
+          cellId.y * 0.015 +
+          cellId.x * 0.025 +
+          wave * 0.25;
+        vec3 color = cycleHue(phase);
+
+        // Per-cell breathing intensity so dots flicker subtly.
+        float breathe =
+          0.55 + 0.45 *
+          (0.5 + 0.5 * sin(uTime * 1.8 + cellId.x * 0.9 + cellId.y * 0.35));
+
+        vec3 finalColor = color * breathe * uBrightness;
+        // Alpha mirrors the dot mask so the gaps between dots are
+        // fully transparent (no flat dark backing card).
+        gl_FragColor = vec4(finalColor, dotMask);
+      }
+    `;
+
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uBrightness: { value: this.brightnessMultiplier },
+        uGrid: { value: new THREE.Vector2(GRID_X, GRID_Y) },
+      },
+      vertexShader,
+      fragmentShader,
+      transparent: true,
+      // Additive blending = the dots stack over the dark backdrop
+      // glowing bright, no flat plane darkening the room.
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+
+    const ceiling = new THREE.Mesh(geo, mat);
+    ceiling.position.set(0, CEILING_Y, CEILING_Z);
+    this.scene.add(ceiling);
+    this.ledCeilingMat = mat;
+  }
+
   private buildVelvetRopes() {
     const POST_HEIGHT = 1.0;
     const POST_RADIUS = 0.04;
@@ -2878,6 +3017,13 @@ export class RunnerGame {
       // sweep over the runway gently rather than flying around.
       c.light.position.z =
         c.baseZ + Math.sin(t * c.pulseHz * 0.5 + c.phase) * c.driftAmp;
+    }
+    // LED ceiling: feed time + brightness to the shader so its
+    // procedural dot grid animates in sync with the rest of the
+    // moving rig.
+    if (this.ledCeilingMat) {
+      this.ledCeilingMat.uniforms.uTime.value = t;
+      this.ledCeilingMat.uniforms.uBrightness.value = brightness;
     }
   }
 
