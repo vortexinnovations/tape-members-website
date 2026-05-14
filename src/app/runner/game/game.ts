@@ -1451,16 +1451,19 @@ export class RunnerGame {
 
       vec3 cycleHue(float phase) {
         float p = fract(phase);
-        float seg = p * 4.0;
+        // Three darker anchors — moody nightclub palette, no
+        // bright light pink, no white-clipping. Saturated but
+        // low-luminance so the additive blending glows over the
+        // dark scene without bleaching it.
+        float seg = p * 3.0;
         float idx = floor(seg);
         float t = seg - idx;
-        vec3 colors[4];
-        colors[0] = vec3(1.00, 0.20, 0.55);   // pink
-        colors[1] = vec3(0.55, 0.10, 0.95);   // purple
-        colors[2] = vec3(0.15, 0.30, 1.00);   // blue
-        colors[3] = vec3(1.00, 0.10, 0.15);   // red
+        vec3 colors[3];
+        colors[0] = vec3(0.30, 0.06, 0.55);   // deep purple
+        colors[1] = vec3(0.06, 0.10, 0.50);   // deep midnight blue
+        colors[2] = vec3(0.55, 0.05, 0.10);   // deep crimson red
         int i = int(idx);
-        int j = int(mod(idx + 1.0, 4.0));
+        int j = int(mod(idx + 1.0, 3.0));
         vec3 a = colors[i];
         vec3 b = colors[j];
         return mix(a, b, t);
