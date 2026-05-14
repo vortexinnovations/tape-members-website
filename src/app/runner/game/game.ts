@@ -1659,9 +1659,7 @@ export class RunnerGame {
    */
   private async loadDancerVisuals() {
     try {
-      // ── Fetch all four assets in parallel ───────────────────
-      // eslint-disable-next-line no-console
-      console.log('[dancer] starting fetch of 5 assets');
+      // ── Fetch all five assets in parallel ───────────────────
       const [meshGltf, animGltf, joints0, weights0, meta] = await Promise.all([
         new GLTFLoader().loadAsync('/models/dancer_female.glb'),
         new GLTFLoader().loadAsync('/models/dance_anim.glb'),
@@ -1674,15 +1672,6 @@ export class RunnerGame {
           bones: string[];
         }>,
       ]);
-      // eslint-disable-next-line no-console
-      console.log('[dancer] all 5 fetches done', {
-        meshChildren: meshGltf.scene.children.length,
-        animChildren: animGltf.scene.children.length,
-        animClips: animGltf.animations.length,
-        joints0Bytes: joints0.byteLength,
-        weights0Bytes: weights0.byteLength,
-        meta,
-      });
 
       // ── Extract the source mesh from the static GLB ─────────
       let sourceMesh: THREE.Mesh | null = null;
@@ -1690,28 +1679,15 @@ export class RunnerGame {
         if (sourceMesh) return;
         if (obj instanceof THREE.Mesh) sourceMesh = obj;
       });
-      if (!sourceMesh) {
-        // eslint-disable-next-line no-console
-        console.warn('[dancer] mesh GLB has no Mesh child');
-        return;
-      }
+      if (!sourceMesh) return; // no mesh in GLB → silent fallback
       const sm = sourceMesh as THREE.Mesh;
-      // eslint-disable-next-line no-console
-      console.log('[dancer] found source mesh', {
-        name: sm.name,
-        vertCount: sm.geometry.getAttribute('position').count,
-        hasMaterial: !!sm.material,
-      });
 
       // ── Verify vertex count matches the weights ─────────────
+      // Mismatch means the weights JSON was generated against a
+      // different mesh — re-run tools/bind_dancer.mjs. Silent
+      // fail keeps the cages empty rather than rendering garbage.
       const positionAttr = sm.geometry.getAttribute('position');
-      if (positionAttr.count !== meta.vertCount) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[dancer] vert count mismatch: mesh=${positionAttr.count} weights=${meta.vertCount}`,
-        );
-        return;
-      }
+      if (positionAttr.count !== meta.vertCount) return;
 
       // ── Build the shared geometry with skinIndex+skinWeight ─
       // skinIndex must be Uint16BufferAttribute (4 per vertex);
@@ -1744,19 +1720,14 @@ export class RunnerGame {
       }
 
       const plinthTop = 0.5;
-      // First-time diagnostic: dump every node name in the cloned
-      // skeleton so we can confirm whether Three.js's GLTFLoader is
-      // sanitizing the Mixamo "mixamorig:" colons into underscores
-      // (which would silently break our literal name lookups).
-      {
-        const probe = animRoot.clone(true);
-        const allNames: string[] = [];
-        probe.traverse((o) => allNames.push(o.name));
-        // eslint-disable-next-line no-console
-        console.log('[dancer] cloned skeleton has', allNames.length, 'nodes');
-        // eslint-disable-next-line no-console
-        console.log('[dancer] sample names:', allNames.slice(0, 8));
-      }
+      // Display-size multiplier on top of the fit-to-mesh scale.
+      // meta.scale (0.568) shrinks the Mixamo skeleton to match
+      // the mesh's source 1 m height. SIZE then blows the whole
+      // thing up so the dancer reads as a real ~1.7 m human
+      // inside the 3 m-tall cage. Applied before IBM compute, so
+      // the inverse bind matrices bake the final scale and the
+      // skinning math doesn't get confused at runtime.
+      const SIZE = 1.7;
 
       for (let i = 0; i < this.dancerPodiums.length; i++) {
         const podium = this.dancerPodiums[i];
@@ -1772,7 +1743,7 @@ export class RunnerGame {
         // Wrapper group carries the fit transform AND the runway-
         // facing rotation. Children inherit both.
         const wrapper = new THREE.Group();
-        wrapper.scale.setScalar(meta.scale);
+        wrapper.scale.setScalar(meta.scale * SIZE);
         wrapper.position.y = meta.offsetY;
         wrapper.add(skeletonClone);
 
@@ -1800,19 +1771,8 @@ export class RunnerGame {
               }
             }
           });
-          if (!found) {
-            // eslint-disable-next-line no-console
-            console.warn(`[dancer] missing bone: ${boneName} (tried: ${candidates.join(', ')})`);
-            return; // bail — incomplete skeleton can't drive the mesh
-          }
+          if (!found) return; // bail silently if a bone can't be resolved
           bones.push(found);
-        }
-        if (i === 0) {
-          // eslint-disable-next-line no-console
-          console.log('[dancer] resolved all 20 bones for podium 0', {
-            firstBone: bones[0].name,
-            firstBoneType: bones[0].type,
-          });
         }
 
         // Compute inverse bind matrices from the bones' CURRENT
@@ -1857,10 +1817,14 @@ export class RunnerGame {
 
         // Place the wrapper inside the cage: feet at top of plinth.
         wrapper.position.y = plinthTop + meta.offsetY;
-        // Face the runway: left-side faces +X, right-side faces -X.
+        // Face the runway: left-side dancer faces +X (toward the
+        // runner's lane), right-side faces -X. Tripo's mesh ships
+        // with its "front" along its local -Z by default, so the
+        // ±π/2 rotations have to be flipped vs. what would face
+        // her forward in identity orientation.
         const isLeftSide = podium.group.position.x < 0;
         const sideSign = isLeftSide ? -1 : 1;
-        wrapper.rotation.y = isLeftSide ? -Math.PI / 2 : Math.PI / 2;
+        wrapper.rotation.y = isLeftSide ? Math.PI / 2 : -Math.PI / 2;
         // Parent to the podium so it scrolls with the cage for free.
         podium.group.add(wrapper);
 
@@ -1870,11 +1834,9 @@ export class RunnerGame {
           sideSign,
         });
       }
-      // eslint-disable-next-line no-console
-      console.log(`[dancer] assembled ${this.dancerVisuals.length} dancers`);
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.error('[dancer] assembly failed', e);
+      console.debug('[runner] dancer assembly failed', e);
     }
   }
 
