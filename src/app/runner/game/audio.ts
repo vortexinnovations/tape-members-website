@@ -1,13 +1,25 @@
 // Audio manager for Tape Runner SFX (May 14, 2026).
 //
-// Tiny wrapper around HTMLAudioElement pools. Admin supplies URLs
-// via games/runner.assetUrls (sfx_jump, sfx_pickup, sfx_water,
-// sfx_combo, sfx_gameover keys); the game loads them on init and
+// Admin supplies URLs via the games/runner doc (sfxJumpUrl,
+// sfxPickupUrl, sfxWaterUrl, sfxComboUrl, sfxGameOverUrl,
+// sfxLaneChangeUrl, sfxRunningUrl); the game loads them on init and
 // fires them on the matching gameplay events.
 //
-// Pooling: each key gets 4 cloned HTMLAudioElement instances. Rapid
-// re-triggers (e.g. two pickups within 100ms) round-robin through
-// the pool so a new play() doesn't cut off the previous one.
+// One-shot strategy: clone-on-play. `load(key, url)` creates a
+// single Audio element that primes the browser's HTTP cache;
+// `play(key)` then spawns a fresh Audio(url) per trigger. Rapid
+// re-triggers (e.g. five drink sounds within a second) overlap
+// cleanly because each one runs on its own element — no fixed pool
+// to exhaust, no `currentTime = 0` racing a pending play()
+// Promise. Each clone listens for its own `ended` event and nulls
+// out its src so the browser can reclaim the audio buffer; the
+// cached HTTP response stays warm for the next play().
+//
+// Loops (e.g. running footsteps) use a different path — one
+// dedicated <audio loop=true> per key, with start/stop semantics
+// (see loadLoop / playLoop / stopLoop below). The clone-on-play
+// trick doesn't fit loops because we need to stop them on mute /
+// game-over / pause.
 //
 // State:
 //   - `mutedByUser` — toggled by the HUD mute button. Persisted to
@@ -16,6 +28,7 @@
 //     the mute button is hidden and play() is a no-op regardless of
 //     mutedByUser.
 //   - `masterVolume` — from games/runner.sfxVolume (0..1).
+//   - `keyVolumes` — per-key 0..1 multiplier on top of master.
 //
 // Autoplay: browsers block audio playback until the page receives a
 // user gesture. The runner's natural first gesture is the swipe-to-
@@ -25,13 +38,13 @@
 // trigger after a user gesture will work).
 
 const LS_KEY_MUTED = 'tape_runner_audio_muted';
-const POOL_SIZE = 4;
 
 export class AudioManager {
-  /** key (e.g. 'jump') → pool of HTMLAudioElement instances. */
-  private pools = new Map<string, HTMLAudioElement[]>();
-  /** Index into each pool, advanced round-robin on play(). */
-  private cursors = new Map<string, number>();
+  /** Cache-priming Audio element per one-shot key. We do NOT play
+   *  these — they exist only to keep a reference alive so the
+   *  initial HTTP fetch isn't GC'd before play() clones get to
+   *  reuse the cached response. */
+  private primers = new Map<string, HTMLAudioElement>();
   /** URL each key is loaded from, so we can skip re-loading on
    *  init() calls that pass the same URLs. One-shots and loops
    *  use namespaced keys ('jump' vs 'loop:running') so a key reused
@@ -178,58 +191,73 @@ export class AudioManager {
   }
 
   /**
-   * Preload (or replace) a SFX key. If the same URL is already
-   * loaded under this key, no-op. If a different URL is loaded,
-   * the old pool is discarded (browser GC reclaims it).
+   * Preload (or replace) a one-shot SFX key. Same URL = no-op.
+   * Different URL = drop the old primer (browser GC reclaims it).
+   * Empty URL = forget the key so subsequent play()s are silent.
    *
-   * Empty string URL means "admin hasn't configured this SFX";
-   * we drop any existing pool so subsequent play()s are silent.
+   * The primer is a single hidden Audio element that triggers the
+   * HTTP fetch + decode. We don't play it directly — play() spawns
+   * its own fresh element per trigger and the browser's HTTP cache
+   * serves the audio data instantly.
    */
   load(key: string, url: string): void {
     if (!url) {
-      this.pools.delete(key);
-      this.cursors.delete(key);
+      this.primers.delete(key);
       this.loadedUrls.delete(key);
       return;
     }
     if (this.loadedUrls.get(key) === url) return;
-    const pool: HTMLAudioElement[] = [];
-    for (let i = 0; i < POOL_SIZE; i++) {
-      const audio = new Audio(url);
-      audio.preload = 'auto';
-      // Don't crossfade — these are short SFX. Browser default
-      // playback already lets us simply call play() to start.
-      pool.push(audio);
+    const audio = new Audio(url);
+    audio.preload = 'auto';
+    // .load() forces the fetch to begin in some browsers (e.g.
+    // Chrome won't pre-fetch otherwise).
+    try {
+      audio.load();
+    } catch {
+      // ignore
     }
-    this.pools.set(key, pool);
-    this.cursors.set(key, 0);
+    this.primers.set(key, audio);
     this.loadedUrls.set(key, url);
   }
 
   /**
-   * Play a SFX. No-op if muted, no pool loaded for the key, or the
-   * browser's autoplay policy rejects the call. Cycles through the
-   * pool so back-to-back triggers don't truncate the previous play.
+   * Play a one-shot SFX. No-op if muted, no URL loaded for the
+   * key, or the browser's autoplay policy rejects the call.
+   *
+   * Spawns a fresh Audio element per trigger so back-to-back fires
+   * (e.g. five rapid bottle pickups) overlap cleanly — no pool to
+   * exhaust, no `currentTime = 0` racing a pending play() Promise.
+   * The element self-disposes via an `ended` listener that drops
+   * its src reference; the browser keeps the underlying audio data
+   * cached for the next play().
    */
   play(key: string): void {
     if (this.muted) return;
-    const pool = this.pools.get(key);
-    if (!pool || pool.length === 0) return;
-    const cursor = this.cursors.get(key) ?? 0;
-    const audio = pool[cursor];
-    this.cursors.set(key, (cursor + 1) % pool.length);
+    const url = this.loadedUrls.get(key);
+    if (!url) return;
     try {
-      audio.currentTime = 0;
+      const audio = new Audio(url);
       audio.volume = this._effectiveVolume(key);
+      // Self-cleanup once playback finishes. We also clear on
+      // `error` so a failed fetch doesn't hang a dead element
+      // alive. { once: true } detaches the listener after firing
+      // so the GC can collect the closure.
+      const cleanup = () => {
+        try {
+          audio.src = '';
+        } catch {
+          // ignore
+        }
+      };
+      audio.addEventListener('ended', cleanup, { once: true });
+      audio.addEventListener('error', cleanup, { once: true });
       // play() returns a Promise that rejects under autoplay
-      // restrictions. We swallow — the SFX is non-critical and the
-      // next play() after a user gesture will succeed.
+      // restrictions or if the fetch fails — swallow either way.
       audio.play().catch(() => {
         // ignore
       });
     } catch {
-      // Some browsers throw synchronously on currentTime= during
-      // a pending play — ignore.
+      // ignore
     }
   }
 
@@ -347,18 +375,13 @@ export class AudioManager {
     }
   }
 
-  /** Stop all sounds (used on dispose / page hide). */
+  /**
+   * Stop all loops (used on dispose / page hide). One-shots
+   * spawned via play() self-dispose on their own — we don't keep
+   * references and can't (easily) round them up. They'll finish
+   * naturally within a couple of seconds.
+   */
   stopAll(): void {
-    for (const pool of this.pools.values()) {
-      for (const audio of pool) {
-        try {
-          audio.pause();
-          audio.currentTime = 0;
-        } catch {
-          // ignore
-        }
-      }
-    }
     for (const audio of this.loops.values()) {
       try {
         audio.pause();
@@ -372,8 +395,16 @@ export class AudioManager {
 
   dispose(): void {
     this.stopAll();
-    this.pools.clear();
-    this.cursors.clear();
+    // Drop primer elements so the browser can GC them. The HTTP
+    // cache is unaffected.
+    for (const audio of this.primers.values()) {
+      try {
+        audio.src = '';
+      } catch {
+        // ignore
+      }
+    }
+    this.primers.clear();
     this.loops.clear();
     this.keyVolumes.clear();
     this.loadedUrls.clear();
