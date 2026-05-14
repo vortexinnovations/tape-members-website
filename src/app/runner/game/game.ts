@@ -1696,18 +1696,19 @@ export class RunnerGame {
       // the bbox makes the runner robust to future asset swaps.
       const srcBbox = new THREE.Box3().setFromObject(gltf.scene);
       const srcHeight = Math.max(srcBbox.max.y - srcBbox.min.y, 0.001);
-      // Target dancer height in metres. 1.7 m reads as a proper
-      // person on the 0.5-m plinths. Bump this up if you want
-      // larger-than-life dancers — Mixamo's clean skin weights
-      // handle uniform scaling cleanly (the old SIZE > 1 stretch
-      // bug was specific to the procedurally-bound asset).
-      const DANCER_HEIGHT = 1.7;
+      // Target dancer height in metres. 1.7 × 1.5 reads as a
+      // larger-than-life dancer on the 0.5-m plinths — bump the
+      // multiplier to taste. Mixamo's clean skin weights handle
+      // uniform scaling cleanly (the old SIZE > 1 stretch bug was
+      // specific to the procedurally-bound asset).
+      const DANCER_HEIGHT = 1.7 * 1.5;
       const dancerScale = DANCER_HEIGHT / srcHeight;
       // Y-offset so the dancer's feet land at plinthTop after
-      // scaling. min.y is in source-asset space, scaled by
-      // dancerScale gives world-space feet position before any
-      // group transform — subtract that to plant her on the plinth.
-      const feetOffsetY = plinthTop - srcBbox.min.y * dancerScale;
+      // scaling, then lower by one body height to bring her down
+      // to a reasonable on-podium position (Mixamo's bind pose
+      // bbox runs taller than the visible feet-to-head range,
+      // so the "feet at plinthTop" formula floated her).
+      const feetOffsetY = plinthTop - srcBbox.min.y * dancerScale - DANCER_HEIGHT;
 
       for (let i = 0; i < this.dancerPodiums.length; i++) {
         const podium = this.dancerPodiums[i];
@@ -1726,7 +1727,10 @@ export class RunnerGame {
         clone.position.y = feetOffsetY;
         const isLeftSide = podium.group.position.x < 0;
         const sideSign = isLeftSide ? -1 : 1;
-        clone.rotation.y = isLeftSide ? -Math.PI / 2 : Math.PI / 2;
+        // Face the runway. Mixamo's bind pose faces -Z, so a
+        // left-side dancer (X < 0) needs +π/2 around Y to look
+        // at +X (toward the runway centre); right-side gets -π/2.
+        clone.rotation.y = isLeftSide ? Math.PI / 2 : -Math.PI / 2;
         // Disable frustum culling on all SkinnedMeshes — the dance
         // pose can extend past the bind-pose bounding sphere
         // (arms raised, etc.) and we don't want them to disappear
