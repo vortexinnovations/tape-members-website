@@ -1,13 +1,19 @@
 // Audio manager for Tape Runner SFX (May 14, 2026).
 //
-// Tiny wrapper around HTMLAudioElement pools. Admin supplies URLs
-// via games/runner.assetUrls (sfx_jump, sfx_pickup, sfx_water,
-// sfx_combo, sfx_gameover keys); the game loads them on init and
-// fires them on the matching gameplay events.
+// Tiny wrapper around HTMLAudioElement instances. Admin supplies
+// URLs via games/runner (sfxJumpUrl, sfxPickupUrl, etc.); the game
+// loads them on init and fires them on the matching gameplay events.
 //
-// Pooling: each key gets 4 cloned HTMLAudioElement instances. Rapid
-// re-triggers (e.g. two pickups within 100ms) round-robin through
-// the pool so a new play() doesn't cut off the previous one.
+// Per-key element count: 1. Earlier versions kept a 4-element pool
+// per key to support back-to-back overlap (so a rapid second
+// pickup didn't cut off the first), but on iOS WKWebView <audio>
+// playback is single-channel — a new play() preempts the previous
+// one regardless of how many elements you have. With ~7 SFX keys
+// the 4-pool meant ~28 native AVPlayer instances alive in the
+// WebView, which contributed measurable startup + steady-state
+// jank for zero benefit on the platform that matters most. So
+// every key now uses one cached element that we rewind (currentTime
+// = 0) on each trigger.
 //
 // State:
 //   - `mutedByUser` — toggled by the HUD mute button. Persisted to
@@ -25,7 +31,7 @@
 // trigger after a user gesture will work).
 
 const LS_KEY_MUTED = 'tape_runner_audio_muted';
-const POOL_SIZE = 4;
+const POOL_SIZE = 1;
 
 export class AudioManager {
   /** key (e.g. 'jump') → pool of HTMLAudioElement instances. */
