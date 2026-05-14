@@ -1457,32 +1457,39 @@ export class RunnerGame {
       console.debug('[runner] horizon-sign font load failed', e);
     }
 
-    // 2. Render the text onto a high-res canvas. Two passes of
-    //    fillText() on top of each other to deepen the red glow
-    //    without resorting to multiple draw calls (one canvas =
-    //    one texture upload).
+    // 2. Render the text onto a high-res canvas with a dark
+    //    rounded backing rectangle so the sign reads against the
+    //    LED-ceiling colour wash even at long distance.
     const PIXEL_W = 2048;
-    const PIXEL_H = 512;
+    const PIXEL_H = 640;
     const canvas = document.createElement('canvas');
     canvas.width = PIXEL_W;
     canvas.height = PIXEL_H;
     const ctx = canvas.getContext('2d');
     if (!ctx) return; // wildly unlikely; bail rather than crash
-    // Transparent background — only the text itself paints.
     ctx.clearRect(0, 0, PIXEL_W, PIXEL_H);
+
+    // Dark backing panel — matte black with a subtle red rim so
+    // the sign reads as an illuminated marquee on a billboard,
+    // not floating text in space. Inset slightly from canvas
+    // edges so the rim is visible and the texture has some margin.
+    const INSET = 24;
+    ctx.fillStyle = '#100307';
+    ctx.fillRect(INSET, INSET, PIXEL_W - 2 * INSET, PIXEL_H - 2 * INSET);
+    ctx.strokeStyle = '#ff2040';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(INSET, INSET, PIXEL_W - 2 * INSET, PIXEL_H - 2 * INSET);
+
+    // Text — two passes for layered glow + core.
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `200px "${FONT_FAMILY}", sans-serif`;
-    // Red neon glow — shadow is drawn before the fill, so a
-    // double-fill effectively layers the glow.
+    ctx.font = `260px "${FONT_FAMILY}", sans-serif`;
     ctx.shadowColor = '#ff3050';
-    ctx.shadowBlur = 28;
-    ctx.fillStyle = '#ff5060';
+    ctx.shadowBlur = 40;
+    ctx.fillStyle = '#ff5566';
     ctx.fillText('ALL ROADS LEAD TO TAPE', PIXEL_W / 2, PIXEL_H / 2);
-    // Second pass with brighter core for a pop of bright on top
-    // of the diffuse outer glow.
-    ctx.shadowBlur = 12;
-    ctx.fillStyle = '#ffd6d8';
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = '#ffe0e2';
     ctx.fillText('ALL ROADS LEAD TO TAPE', PIXEL_W / 2, PIXEL_H / 2);
 
     // 3. Build the mesh.
@@ -1491,24 +1498,28 @@ export class RunnerGame {
     tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
     tex.needsUpdate = true;
 
-    const SIGN_W = 14;
-    const SIGN_H = SIGN_W * (PIXEL_H / PIXEL_W); // ~3.5 m
+    // Much larger sign + closer position. The previous z = -180
+    // with a 14 m sign was angularly ~4° wide on a 1080p screen
+    // — visible but easy to miss. 30 m wide × 7.5 m tall at
+    // z = -120 reads as a proper marquee — clearly the focal
+    // point at the end of the runway without dominating the
+    // play area.
+    const SIGN_W = 30;
+    const SIGN_H = SIGN_W * (PIXEL_H / PIXEL_W); // ~9.4 m
     const geo = new THREE.PlaneGeometry(SIGN_W, SIGN_H);
     const mat = new THREE.MeshBasicMaterial({
       map: tex,
       transparent: true,
       depthWrite: false,
       toneMapped: false,
-      // Premultiplied keeps the glow halo clean against the dark
-      // background (no dark fringe around the text edges).
-      premultipliedAlpha: false,
     });
 
     const sign = new THREE.Mesh(geo, mat);
-    // Far down the runway, centred in the lane, eye-level so it
-    // sits on the horizon line. Z = -180 is well inside the
-    // camera's 200 m far-clip (camera at z = 8 → distance 188 m).
-    sign.position.set(0, 4.5, -180);
+    // Centred in the lane, well above the runway so it reads as
+    // overhead signage. y = 6.5 sits just below the LED ceiling
+    // at y = 8.5 — comfortably in the camera's view, doesn't
+    // collide with the dancer podiums.
+    sign.position.set(0, 6.5, -120);
     this.scene.add(sign);
   }
 
