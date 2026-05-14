@@ -111,8 +111,20 @@ export type InitPayload = {
      * Default true.
      */
     sfxEnabled?: boolean;
-    /** Master volume 0..1. Default 1.0. Clamped game-side. */
+    /** Master volume 0..1. Default 1.0. Clamped game-side. Final
+     *  per-clip volume = `sfxVolume * sfx<Event>Volume`. */
     sfxVolume?: number;
+    // Per-event volume multipliers 0..1. Final clip volume on each
+    // play() is `sfxVolume * sfx<Event>Volume`. Missing or non-
+    // numeric values default to 1.0 (no per-event attenuation).
+    // Clamped to [0, 1] on the game side.
+    sfxJumpVolume?: number;
+    sfxPickupVolume?: number;
+    sfxWaterVolume?: number;
+    sfxComboVolume?: number;
+    sfxGameOverVolume?: number;
+    sfxLaneChangeVolume?: number;
+    sfxRunningVolume?: number;
     /**
      * Per-event SFX URLs. Each key is independent; an empty/missing
      * URL means "admin hasn't configured this SFX, play silently."

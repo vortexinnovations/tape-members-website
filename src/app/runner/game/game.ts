@@ -4049,6 +4049,23 @@ export class RunnerGame {
       if (typeof s.sfxVolume === 'number' && Number.isFinite(s.sfxVolume)) {
         this.audio.setMasterVolume(s.sfxVolume);
       }
+      // Per-event volume multipliers. Final play volume per clip is
+      // `sfxVolume * sfx<Event>Volume`. Missing values default to 1.0
+      // (no per-event attenuation). Setting any value here updates
+      // live loops immediately so admin slider tweaks audition on
+      // the next snapshot tick.
+      const setVol = (key: string, v: unknown): void => {
+        if (typeof v === 'number' && Number.isFinite(v)) {
+          this.audio.setKeyVolume(key, v);
+        }
+      };
+      setVol('jump', s.sfxJumpVolume);
+      setVol('pickup', s.sfxPickupVolume);
+      setVol('water', s.sfxWaterVolume);
+      setVol('combo', s.sfxComboVolume);
+      setVol('gameover', s.sfxGameOverVolume);
+      setVol('lanechange', s.sfxLaneChangeVolume);
+      setVol('running', s.sfxRunningVolume);
       // Per-event URLs. Empty / missing strings drop any existing
       // pool for that key (silent fallback). The AudioManager
       // skips re-loading if the URL hasn't changed.

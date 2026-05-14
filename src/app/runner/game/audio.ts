@@ -48,6 +48,11 @@ export class AudioManager {
    *  resumeLoops() / unmute can resurrect them automatically. */
   private loopWantPlaying = new Set<string>();
 
+  /** Per-key 0..1 volume multiplier applied on top of `_masterVolume`.
+   *  Default for any key not present is 1.0 (no attenuation). Lets
+   *  admin balance individual SFX without touching the master. */
+  private keyVolumes = new Map<string, number>();
+
   private _mutedByUser = false;
   private _enabledByAdmin = true;
   private _masterVolume = 1.0;
@@ -109,13 +114,39 @@ export class AudioManager {
     this._masterVolume = Math.max(0, Math.min(1, volume));
     // Live loops need the new volume immediately — one-shots pick
     // it up on their next play() call.
-    for (const audio of this.loops.values()) {
+    for (const [key, audio] of this.loops) {
       try {
-        audio.volume = this._masterVolume;
+        audio.volume = this._effectiveVolume(key);
       } catch {
         // ignore — element may be in a transitional state
       }
     }
+  }
+
+  /**
+   * Per-key 0..1 multiplier. Final volume on each play / loop start
+   * is `_masterVolume * keyVolume`. Clamped to [0, 1] before storing.
+   * Updates live-playing loops immediately so admin volume slider
+   * dragging gets instant feedback.
+   */
+  setKeyVolume(key: string, volume: number): void {
+    if (!Number.isFinite(volume)) return;
+    const clamped = Math.max(0, Math.min(1, volume));
+    this.keyVolumes.set(key, clamped);
+    const loop = this.loops.get(key);
+    if (loop) {
+      try {
+        loop.volume = this._effectiveVolume(key);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  /** Internal: master × per-key (default 1.0 if no per-key set). */
+  private _effectiveVolume(key: string): number {
+    const k = this.keyVolumes.get(key);
+    return this._masterVolume * (k ?? 1.0);
   }
 
   /** Internal: bring loops into agreement with the current mute
@@ -136,7 +167,7 @@ export class AudioManager {
     for (const [key, audio] of this.loops) {
       if (!this.loopWantPlaying.has(key)) continue;
       try {
-        audio.volume = this._masterVolume;
+        audio.volume = this._effectiveVolume(key);
         audio.play().catch(() => {
           // autoplay rejection — next user gesture will succeed
         });
@@ -189,7 +220,7 @@ export class AudioManager {
     this.cursors.set(key, (cursor + 1) % pool.length);
     try {
       audio.currentTime = 0;
-      audio.volume = this._masterVolume;
+      audio.volume = this._effectiveVolume(key);
       // play() returns a Promise that rejects under autoplay
       // restrictions. We swallow — the SFX is non-critical and the
       // next play() after a user gesture will succeed.
@@ -239,7 +270,7 @@ export class AudioManager {
     // it off now (subject to mute).
     if (this.loopWantPlaying.has(key) && !this.muted) {
       try {
-        audio.volume = this._masterVolume;
+        audio.volume = this._effectiveVolume(key);
         audio.play().catch(() => {});
       } catch {
         // ignore
@@ -259,7 +290,7 @@ export class AudioManager {
     const audio = this.loops.get(key);
     if (!audio) return;
     try {
-      audio.volume = this._masterVolume;
+      audio.volume = this._effectiveVolume(key);
       audio.play().catch(() => {
         // autoplay rejection — next user gesture will succeed
       });
@@ -308,7 +339,7 @@ export class AudioManager {
     for (const [key, audio] of this.loops) {
       if (!this.loopWantPlaying.has(key)) continue;
       try {
-        audio.volume = this._masterVolume;
+        audio.volume = this._effectiveVolume(key);
         audio.play().catch(() => {});
       } catch {
         // ignore
@@ -344,6 +375,7 @@ export class AudioManager {
     this.pools.clear();
     this.cursors.clear();
     this.loops.clear();
+    this.keyVolumes.clear();
     this.loadedUrls.clear();
   }
 }
