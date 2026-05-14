@@ -1503,17 +1503,16 @@ export class RunnerGame {
           (0.5 + 0.5 * sin(uTime * 1.8 + cellId.x * 0.9 + cellId.y * 0.35));
 
         // Depth fade — dim the distant end of the ceiling so the
-        // grid recedes into the dark fast. After the geometry's
+        // grid recedes into dark fast. After the geometry's
         // rotateX(-π/2), vUv.y = 0 is the NEAR end (just behind
         // the camera) and vUv.y = 1 is the FAR end (z = -190).
-        // smoothstep(0.35, 0.85, 1 - vUv.y) means:
-        //   - vUv.y ≤ 0.15 → fully bright (near camera)
-        //   - vUv.y ≥ 0.65 → fully dark (distant end gone)
-        //   - fade across the middle 50 %
-        // Combined with the power curve below, the distant half of
-        // the ceiling is mostly dark and the bright zone clings
-        // close to the camera.
-        float depthFade = pow(smoothstep(0.35, 0.85, 1.0 - vUv.y), 1.5);
+        // smoothstep(0.55, 0.95, 1 - vUv.y) means:
+        //   - vUv.y ≤ 0.05 → fully bright (only the nearest dots)
+        //   - vUv.y ≥ 0.45 → fully dark (over half the plane is gone)
+        //   - fade across vUv.y ∈ [0.05, 0.45]
+        // pow(..., 2.0) makes the mid-fade non-linear so the dots
+        // drop to near-black very quickly past the near band.
+        float depthFade = pow(smoothstep(0.55, 0.95, 1.0 - vUv.y), 2.0);
 
         vec3 finalColor = color * breathe * uBrightness * depthFade;
         // Alpha mirrors the dot mask × depth fade so the gaps
