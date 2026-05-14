@@ -1725,57 +1725,72 @@ export class RunnerGame {
    */
   private async loadDancerVisuals() {
     try {
-      const gltf = await new GLTFLoader().loadAsync('/models/dancer_animated.glb');
-      const animClip = gltf.animations[0];
-      if (!animClip) return; // baked GLB missing the clip — bail silently
+      // Two dancer variants — Mixamo auto-rigs from different
+      // Tripo3D source meshes. Each podium randomly picks one so
+      // the row reads as a mix of personalities, not 10 clones.
+      // Loaded in parallel; if either 404s, the variant just
+      // isn't used (the array filter below handles missing).
+      const loader = new GLTFLoader();
+      const [blondeGltf, darkGltf] = await Promise.all([
+        loader.loadAsync('/models/dancer_animated.glb').catch(() => null),
+        loader.loadAsync('/models/dancer_animated_dark.glb').catch(() => null),
+      ]);
 
       const plinthTop = 0.5;
-
-      // Compute the source mesh's bbox once so we can derive a
-      // size-normalising scale and feet-on-plinth offset that work
-      // regardless of how the GLB was authored (Mixamo's auto-rig
-      // tends to land at ~1 m with origin at the hip; older
-      // procedurally-bound assets baked their own size in). Using
-      // the bbox makes the runner robust to future asset swaps.
-      const srcBbox = new THREE.Box3().setFromObject(gltf.scene);
-      const srcHeight = Math.max(srcBbox.max.y - srcBbox.min.y, 0.001);
-      // Target dancer height in metres. 1.7 × 1.5 reads as a
-      // larger-than-life dancer on the 0.5-m plinths — bump the
-      // multiplier to taste. Mixamo's clean skin weights handle
-      // uniform scaling cleanly (the old SIZE > 1 stretch bug was
-      // specific to the procedurally-bound asset).
+      // Shared positioning constants — applied to both variants so
+      // their visible size + plinth alignment match exactly. The
+      // bbox-derived `dancerScale` per variant guarantees both end
+      // up at DANCER_HEIGHT on screen even if their bind-pose bboxes
+      // differ slightly.
       const DANCER_HEIGHT = 1.7 * 1.35;
-      const dancerScale = DANCER_HEIGHT / srcHeight;
-      // Y-offset so the dancer's feet land at plinthTop after
-      // scaling, then lower by one body height to bring her down
-      // to a reasonable on-podium position (Mixamo's bind pose
-      // bbox runs taller than the visible feet-to-head range,
-      // so the "feet at plinthTop" formula floated her). The
-      // small `DANCER_LIFT` raises her again to taste.
       const DANCER_LIFT = 0.8;
-      const feetOffsetY =
-        plinthTop - srcBbox.min.y * dancerScale - DANCER_HEIGHT + DANCER_LIFT;
-      // Step inward (toward the runway centre) so dancers crowd
-      // the edge of the plinth instead of standing flush at the
-      // back. Negated `sideSign` because sideSign points AWAY
-      // from the centreline.
       const DANCER_INWARD = 1.0;
+
+      // Pre-compute scale + feet-offset for each variant so we
+      // don't redo the bbox calc per podium. Variants that failed
+      // to load are filtered out — random pick draws from whatever
+      // landed.
+      type Variant = {
+        scene: THREE.Object3D;
+        clip: THREE.AnimationClip;
+        scale: number;
+        offsetY: number;
+      };
+      const variants: Variant[] = [];
+      for (const gltf of [blondeGltf, darkGltf]) {
+        if (!gltf) continue;
+        const clip = gltf.animations[0];
+        if (!clip) continue;
+        const bbox = new THREE.Box3().setFromObject(gltf.scene);
+        const height = Math.max(bbox.max.y - bbox.min.y, 0.001);
+        const scale = DANCER_HEIGHT / height;
+        const offsetY =
+          plinthTop - bbox.min.y * scale - DANCER_HEIGHT + DANCER_LIFT;
+        variants.push({ scene: gltf.scene, clip, scale, offsetY });
+      }
+      if (variants.length === 0) return; // both failed to load
 
       for (let i = 0; i < this.dancerPodiums.length; i++) {
         const podium = this.dancerPodiums[i];
+
+        // Random variant pick per podium. Math.random() is fine —
+        // assignment is stable for the lifetime of the game session
+        // (we only run this once at init). Players see a different
+        // mix across runs which keeps the row from feeling static.
+        const variant = variants[Math.floor(Math.random() * variants.length)];
 
         // Deep clone preserving bone references + skinned-mesh
         // bindings. The shared geometry + materials live on the
         // source gltf.scene; SkeletonUtils.clone gives each podium
         // a fresh skeleton hierarchy so animation state is per-
         // instance.
-        const clone = cloneSkinned(gltf.scene);
+        const clone = cloneSkinned(variant.scene);
 
-        // Apply the size + feet-on-plinth offset uniformly. The
-        // dancer's GLB is Mixamo-rigged so uniform parent scale
-        // doesn't disturb the bind matrices.
-        clone.scale.setScalar(dancerScale);
-        clone.position.y = feetOffsetY;
+        // Apply the per-variant scale + feet-on-plinth offset.
+        // Mixamo's clean skin weights handle uniform parent scale
+        // without bind-matrix distortion.
+        clone.scale.setScalar(variant.scale);
+        clone.position.y = variant.offsetY;
         const isLeftSide = podium.group.position.x < 0;
         const sideSign = isLeftSide ? -1 : 1;
         // Nudge toward the runway centre. The podium positions are
@@ -1797,7 +1812,7 @@ export class RunnerGame {
         // Per-clone AnimationMixer + clip action. Mixer targets the
         // clone (not gltf.scene) so each one ticks independently.
         const mixer = new THREE.AnimationMixer(clone);
-        const action = mixer.clipAction(animClip);
+        const action = mixer.clipAction(variant.clip);
         action.setLoop(THREE.LoopRepeat, Infinity);
         action.play();
         // Stagger clip times so the 10 dancers spread evenly across
