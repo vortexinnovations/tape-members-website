@@ -70,6 +70,38 @@ interface ActiveObstacle {
   mixer?: THREE.AnimationMixer;
 }
 
+// ── Podium LED colour cycle ────────────────────────────────────────
+// Slow rainbow rotation for the dancer podiums. Hue moves through
+// pink → purple → blue → red → back to pink. Per-podium phase
+// offset gives a flowing wave along the row of podiums (see
+// `tickDancerPodiums`).
+//
+// Anchors chosen to land on saturated TAPE-friendly hues (avoid
+// muddy intermediates). Linear RGB interpolation between adjacent
+// anchors.
+const LED_HUE_ANCHORS: [number, number, number][] = [
+  [1.0, 0.20, 0.55], // pink
+  [0.55, 0.10, 0.95], // purple
+  [0.15, 0.30, 1.0], // blue
+  [1.0, 0.10, 0.15], // red
+];
+
+/** Map a normalised phase 0..1 onto a colour somewhere along the
+ *  anchor cycle. Returns `[r, g, b]` each 0..1. */
+function cycleLEDColor(phase: number): [number, number, number] {
+  const n = LED_HUE_ANCHORS.length;
+  const seg = ((phase % 1) + 1) % 1 * n;
+  const i = Math.floor(seg) % n;
+  const t = seg - Math.floor(seg);
+  const a = LED_HUE_ANCHORS[i];
+  const b = LED_HUE_ANCHORS[(i + 1) % n];
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ];
+}
+
 // ── Game class ─────────────────────────────────────────────────────
 
 export class RunnerGame {
@@ -1637,21 +1669,32 @@ export class RunnerGame {
     const brightness = this.brightnessMultiplier;
     // 2.5 s breathing period → 2π / 2.5 ≈ 2.513 rad/s
     const omega = (2 * Math.PI) / 2.5;
+    // Slow rainbow cycle through the 4 anchor hues: pink → purple
+    // → blue → red → back to pink. 16 s per full rotation reads as
+    // a clear gradual shift without feeling busy.
+    const CYCLE_PERIOD = 16;
+    const cyclePhase = (t / CYCLE_PERIOD) % 1;
     for (const p of this.dancerPodiums) {
       const pulse = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * omega + p.phase));
-      // Modulate the base TAPE red by the pulse value. Clamp at 1
-      // so the brightness multiplier can dim but not super-bright
-      // (avoids white-clipping the red).
+      // Per-podium colour offset so the row reads as a flowing
+      // wave of hue, not all-in-sync. Reuse the pulse-phase value
+      // (in radians) as a fractional cycle offset — gives ~60 %
+      // of cycle spread across the 10 podiums.
+      const localCycle = (cyclePhase + p.phase / (2 * Math.PI)) % 1;
+      const [r, g, b] = cycleLEDColor(localCycle);
+      // Modulate brightness by pulse × brightness, clamped at 1
+      // so admin brightness > 1 doesn't white-clip the hue.
       const v = Math.min(1, pulse * brightness);
       // All 8 LED tubes on this podium share one material — single
       // mutation updates verticals + top rails together.
-      p.ledMat.color.setRGB(v, v * 0.02, v * 0.18); // saturated TAPE red
-      // Top lid panel: opacity tracks the pulse but stays in a
-      // narrower band (0.30 – 0.55) — the frame should always
-      // out-glow the fill.
+      p.ledMat.color.setRGB(r * v, g * v, b * v);
+      // Top lid panel: hue matches the LED tubes (panel sits
+      // immediately above them). Brightness lives in opacity
+      // instead — keep the panel from out-glowing the frame.
+      p.panelMat.color.setRGB(r, g, b);
       p.panelMat.opacity = 0.30 + 0.25 * pulse;
-      // Floor glow tracks the LED pulse but at lower opacity so
-      // it doesn't dominate.
+      // Floor glow disc — same hue as the LEDs, lower opacity.
+      p.glowMat.color.setRGB(r, g, b);
       p.glowMat.opacity = 0.20 + 0.25 * pulse;
     }
   }
