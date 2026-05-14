@@ -274,8 +274,8 @@ export class RunnerGame {
    * adjacent podiums shouldn't perform the same beat in unison).
    */
   private dancerVisuals: {
-    /** The wrapper Group containing the scaled skeleton + mesh. */
-    root: THREE.Group;
+    /** Root of the cloned rig (SkeletonUtils.clone returns Object3D). */
+    root: THREE.Object3D;
     mixer: THREE.AnimationMixer;
     /** -1 for left-side podiums, +1 for right-side — used to flip
      *  the base rotation so the dancer faces the runway. */
@@ -1635,246 +1635,84 @@ export class RunnerGame {
   }
 
   /**
-   * Load the dancer asset trio (static mesh + Mixamo skeleton +
-   * skin-weights binary) and assemble a SkinnedMesh inside each
-   * podium cage with an animation mixer playing the dance loop.
+   * Load `dancer_animated.glb` and place one cloned instance inside
+   * each podium cage.
    *
-   * The offline binding script (`bind_dancer.mjs`) computed
-   * per-vertex weights against 20 major bones of the Mixamo
-   * skeleton, scaled + offset to fit our 1m-tall Tripo mesh.
-   * Runtime job: load all three pieces, construct a Three.js
-   * `Skeleton` from the scaled bone tree, build a SkinnedMesh
-   * using the original mesh geometry + our computed skinIndex/
-   * skinWeight attributes, and drive it with an AnimationMixer
-   * pointed at the bundled clip.
+   * The GLB is a fully-baked rigged+animated asset produced by
+   * `tools/build_dancer_anim.mjs` — Tripo mesh + Mixamo skeleton +
+   * skin attribute + "Arms Hip Hop Dance" clip, all merged into one
+   * file with the fit-to-mesh scale × display-size multiplier baked
+   * into the root node. Same standard glTF rig pattern as the
+   * runner / jump / fall characters, so Three.js's GLTFLoader sets
+   * up the SkinnedMesh natively and the runtime path is trivially
+   * robust (no manual bind() / IBM construction).
    *
-   * Each podium gets its own clone of the skeleton + its own
-   * mixer so dancers can be out of phase — adjacent podiums
-   * shouldn't all be on beat 0 of the loop. Mesh geometry +
-   * texture are shared across clones (Three.js convention),
-   * so 10 dancers = ~1× GPU memory footprint of one.
+   * Per-podium work:
+   *   • SkeletonUtils.clone() — produces an independent rig
+   *     (separate skeleton state) sharing the source GLB's
+   *     geometry + materials + textures.
+   *   • Add to podium.group with the runway-facing rotation.
+   *   • Per-clone AnimationMixer playing the bundled clip, with a
+   *     staggered start time so adjacent dancers aren't on the
+   *     same beat.
    *
-   * Failure-silent: if any of the four files 404s, cages stay
-   * empty — podiums still look great.
+   * Failure-silent: a 404 on the GLB leaves the cages empty.
    */
   private async loadDancerVisuals() {
     try {
-      // ── Fetch all four assets in parallel ───────────────────
-      // eslint-disable-next-line no-console
-      console.log('[dancer] starting fetch of 5 assets');
-      const [meshGltf, animGltf, joints0, weights0, meta] = await Promise.all([
-        new GLTFLoader().loadAsync('/models/dancer_female.glb'),
-        new GLTFLoader().loadAsync('/models/dance_anim.glb'),
-        fetch('/models/dance_skin_joints.bin').then((r) => r.arrayBuffer()),
-        fetch('/models/dance_skin_weights.bin').then((r) => r.arrayBuffer()),
-        fetch('/models/dance_skin_meta.json').then((r) => r.json()) as Promise<{
-          vertCount: number;
-          scale: number;
-          offsetY: number;
-          bones: string[];
-        }>,
-      ]);
-      // eslint-disable-next-line no-console
-      console.log('[dancer] all 5 fetches done', {
-        meshChildren: meshGltf.scene.children.length,
-        animChildren: animGltf.scene.children.length,
-        animClips: animGltf.animations.length,
-        joints0Bytes: joints0.byteLength,
-        weights0Bytes: weights0.byteLength,
-        meta,
-      });
-
-      // ── Extract the source mesh from the static GLB ─────────
-      let sourceMesh: THREE.Mesh | null = null;
-      meshGltf.scene.traverse((obj) => {
-        if (sourceMesh) return;
-        if (obj instanceof THREE.Mesh) sourceMesh = obj;
-      });
-      if (!sourceMesh) {
-        // eslint-disable-next-line no-console
-        console.warn('[dancer] mesh GLB has no Mesh child');
-        return;
-      }
-      const sm = sourceMesh as THREE.Mesh;
-      // eslint-disable-next-line no-console
-      console.log('[dancer] found source mesh', {
-        name: sm.name,
-        vertCount: sm.geometry.getAttribute('position').count,
-        hasMaterial: !!sm.material,
-      });
-
-      // ── Verify vertex count matches the weights ─────────────
-      const positionAttr = sm.geometry.getAttribute('position');
-      if (positionAttr.count !== meta.vertCount) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[dancer] vert count mismatch: mesh=${positionAttr.count} weights=${meta.vertCount}`,
-        );
-        return;
-      }
-
-      // ── Build the shared geometry with skinIndex+skinWeight ─
-      // skinIndex must be Uint16BufferAttribute (4 per vertex);
-      // skinWeight is Float32 (4 per vertex). Both attributes are
-      // added to a CLONE of the geometry so we don't mutate the
-      // original (multiple SkinnedMesh instances can share this
-      // skinned-geometry, since the skinning math depends only
-      // on attributes + skeleton — which is per-instance).
-      const skinnedGeo = sm.geometry.clone();
-      skinnedGeo.setAttribute(
-        'skinIndex',
-        new THREE.Uint16BufferAttribute(new Uint16Array(joints0), 4),
-      );
-      skinnedGeo.setAttribute(
-        'skinWeight',
-        new THREE.BufferAttribute(new Float32Array(weights0), 4),
-      );
-      const sharedMaterial = sm.material;
-
-      // ── Find the prefab scaling root for the Mixamo skeleton ─
-      // animGltf.scene is the original Mixamo bone tree at native
-      // ~1.41m scale. Each clone of the skeleton wraps it inside a
-      // Group with our computed scale + offsetY so the skeleton's
-      // T-pose aligns with the mesh's 1m-tall coordinate frame.
-      const animRoot = animGltf.scene;
-      const animClip = animGltf.animations[0];
-      if (!animClip) {
-        console.debug('[runner] dance anim has no clip');
-        return;
-      }
+      const gltf = await new GLTFLoader().loadAsync('/models/dancer_animated.glb');
+      const animClip = gltf.animations[0];
+      if (!animClip) return; // baked GLB missing the clip — bail silently
 
       const plinthTop = 0.5;
-      // First-time diagnostic: dump every node name in the cloned
-      // skeleton so we can confirm whether Three.js's GLTFLoader is
-      // sanitizing the Mixamo "mixamorig:" colons into underscores
-      // (which would silently break our literal name lookups).
-      {
-        const probe = animRoot.clone(true);
-        const allNames: string[] = [];
-        probe.traverse((o) => allNames.push(o.name));
-        // eslint-disable-next-line no-console
-        console.log('[dancer] cloned skeleton has', allNames.length, 'nodes');
-        // eslint-disable-next-line no-console
-        console.log('[dancer] sample names:', allNames.slice(0, 8));
-      }
-
       for (let i = 0; i < this.dancerPodiums.length; i++) {
         const podium = this.dancerPodiums[i];
-        // Each podium gets its own deep clone of the skeleton so
-        // animation state is independent per dancer. SkeletonUtils
-        // would preserve bone-name uniqueness across clones, but
-        // since each dancer's skeleton lives in a separate Group
-        // and AnimationMixer targets the root, plain Object3D
-        // clone(true) works (Three.js' clone preserves the tree
-        // structure + name references that the AnimationClip uses).
-        const skeletonClone = animRoot.clone(true);
 
-        // Wrapper group carries the fit transform AND the runway-
-        // facing rotation. Children inherit both.
-        const wrapper = new THREE.Group();
-        wrapper.scale.setScalar(meta.scale);
-        wrapper.position.y = meta.offsetY;
-        wrapper.add(skeletonClone);
+        // Deep clone preserving bone references + skinned-mesh
+        // bindings. The shared geometry + materials live on the
+        // source gltf.scene; SkeletonUtils.clone gives each podium
+        // a fresh skeleton hierarchy so animation state is per-
+        // instance.
+        const clone = cloneSkinned(gltf.scene);
 
-        // Collect the 20 major bones in the same order the offline
-        // script used (this is the index order in skinIndex). We
-        // accept both the original "mixamorig:Hips" form and the
-        // sanitised "mixamorig_Hips" — different GLTF parsers and
-        // exporters disagree on whether to preserve colons. The
-        // first form found wins; we also strip any "Object_" prefix
-        // some pipelines add.
-        const bones: THREE.Bone[] = [];
-        for (const boneName of meta.bones) {
-          const candidates = [
-            boneName,
-            boneName.replace(/:/g, '_'),
-            boneName.replace(/:/g, ''),
-          ];
-          let found: THREE.Bone | null = null;
-          skeletonClone.traverse((obj) => {
-            if (found) return;
-            for (const cand of candidates) {
-              if (obj.name === cand) {
-                found = obj as THREE.Bone;
-                return;
-              }
-            }
-          });
-          if (!found) {
-            // eslint-disable-next-line no-console
-            console.warn(`[dancer] missing bone: ${boneName} (tried: ${candidates.join(', ')})`);
-            return; // bail — incomplete skeleton can't drive the mesh
-          }
-          bones.push(found);
-        }
-        if (i === 0) {
-          // eslint-disable-next-line no-console
-          console.log('[dancer] resolved all 20 bones for podium 0', {
-            firstBone: bones[0].name,
-            firstBoneType: bones[0].type,
-          });
-        }
-
-        // Compute inverse bind matrices from the bones' CURRENT
-        // world matrices (which reflect the wrapper's scale +
-        // offset). Must update the world matrices before reading
-        // them — Three.js doesn't recompute lazily.
-        wrapper.updateMatrixWorld(true);
-        const inverseBindMatrices = bones.map((b) => {
-          const inv = new THREE.Matrix4();
-          inv.copy(b.matrixWorld).invert();
-          return inv;
+        // Position at the plinth top, facing the runway. Left-side
+        // dancer (X < 0) faces +X, right-side faces -X. The clone
+        // already carries the fit×display scale internally (baked
+        // by the offline tool), so no additional scale is applied
+        // here — that would trigger the bind-matrix mismatch we
+        // hit in the earlier runtime-bake attempts.
+        clone.position.y = plinthTop;
+        const isLeftSide = podium.group.position.x < 0;
+        const sideSign = isLeftSide ? -1 : 1;
+        clone.rotation.y = isLeftSide ? -Math.PI / 2 : Math.PI / 2;
+        // Disable frustum culling on all SkinnedMeshes — the dance
+        // pose can extend past the bind-pose bounding sphere
+        // (arms raised, etc.) and we don't want them to disappear
+        // when that happens.
+        clone.traverse((obj) => {
+          if (obj instanceof THREE.SkinnedMesh) obj.frustumCulled = false;
         });
+        podium.group.add(clone);
 
-        // Build the skeleton + skinned mesh.
-        const skeleton = new THREE.Skeleton(bones, inverseBindMatrices);
-        const skinnedMesh = new THREE.SkinnedMesh(skinnedGeo, sharedMaterial);
-        // The skin needs to be parented OUTSIDE the scaled wrapper
-        // so its world transform isn't doubly-scaled. The skin's
-        // bones come from inside the wrapper (already scaled), and
-        // the skinning math uses those bones' world matrices —
-        // which already include the scale. So the skinned mesh's
-        // own transform should be identity in world space.
-        // Disable frustum culling: SkinnedMesh bounding spheres
-        // come from the bind pose, but the dance pose can extend
-        // outside that sphere (arms raised, etc.).
-        skinnedMesh.frustumCulled = false;
-        skinnedMesh.bind(skeleton);
-        // Add to the same wrapper as the skeleton so transforms
-        // align (the wrapper's scale applies to both mesh and
-        // bones uniformly).
-        wrapper.add(skinnedMesh);
-
-        // Mixer drives the skeleton; clip targets bones by name
-        // (mixamorig:Hips, etc.) which are present in skeletonClone.
-        const mixer = new THREE.AnimationMixer(skeletonClone);
+        // Per-clone AnimationMixer + clip action. Mixer targets the
+        // clone (not gltf.scene) so each one ticks independently.
+        const mixer = new THREE.AnimationMixer(clone);
         const action = mixer.clipAction(animClip);
         action.setLoop(THREE.LoopRepeat, Infinity);
         action.play();
-        // Offset each dancer's clip time by a different amount so
-        // adjacent podiums aren't on the same beat. Clip is 21.96s.
-        mixer.setTime(i * 1.4); // 14% of clip length per podium
-
-        // Place the wrapper inside the cage: feet at top of plinth.
-        wrapper.position.y = plinthTop + meta.offsetY;
-        // Face the runway: left-side faces +X, right-side faces -X.
-        const isLeftSide = podium.group.position.x < 0;
-        const sideSign = isLeftSide ? -1 : 1;
-        wrapper.rotation.y = isLeftSide ? -Math.PI / 2 : Math.PI / 2;
-        // Parent to the podium so it scrolls with the cage for free.
-        podium.group.add(wrapper);
+        // Stagger clip times so the 10 dancers spread evenly across
+        // the 21.96 s loop (~2.2 s apart, never two on the same beat).
+        mixer.setTime(i * 1.4);
 
         this.dancerVisuals.push({
-          root: wrapper,
+          root: clone,
           mixer,
           sideSign,
         });
       }
-      // eslint-disable-next-line no-console
-      console.log(`[dancer] assembled ${this.dancerVisuals.length} dancers`);
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.error('[dancer] assembly failed', e);
+      console.debug('[runner] dancer load failed', e);
     }
   }
 
