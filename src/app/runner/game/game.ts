@@ -1432,6 +1432,11 @@ export class RunnerGame {
       uniform float uTime;
       uniform float uBrightness;
       uniform vec2 uGrid;
+      // Total scrolled distance in metres. Fed by tickClubLights
+      // each frame so the dot grid pattern moves toward the camera
+      // at the same speed as the floor stripes / podiums / ropes,
+      // rather than sitting locked to the player's overhead.
+      uniform float uScroll;
       varying vec2 vUv;
 
       vec3 cycleHue(float phase) {
@@ -1452,7 +1457,15 @@ export class RunnerGame {
       }
 
       void main() {
-        vec2 cell = vUv * uGrid;
+        // Offset the cell grid by the world scroll so dots appear
+        // to flow toward the camera. The plane is 200 m long and
+        // there are uGrid.y dots along its length, so 1 m of scroll
+        // = uGrid.y / 200 cells. Adding to the .y component (which
+        // maps to world -Z after the X-axis flip in geometry rotation)
+        // makes the cells slide in the same direction as floor
+        // stripes scrolling toward +Z.
+        float scrollCells = uScroll * (uGrid.y / 200.0);
+        vec2 cell = vec2(vUv.x * uGrid.x, vUv.y * uGrid.y + scrollCells);
         vec2 cellId = floor(cell);
         vec2 local = fract(cell) - 0.5;
         float d = length(local);
@@ -1488,6 +1501,7 @@ export class RunnerGame {
         uTime: { value: 0 },
         uBrightness: { value: this.brightnessMultiplier },
         uGrid: { value: new THREE.Vector2(GRID_X, GRID_Y) },
+        uScroll: { value: 0 },
       },
       vertexShader,
       fragmentShader,
@@ -3018,12 +3032,17 @@ export class RunnerGame {
       c.light.position.z =
         c.baseZ + Math.sin(t * c.pulseHz * 0.5 + c.phase) * c.driftAmp;
     }
-    // LED ceiling: feed time + brightness to the shader so its
-    // procedural dot grid animates in sync with the rest of the
-    // moving rig.
+    // LED ceiling: feed time + brightness + accumulated world
+    // scroll distance to the shader. uScroll drives the cell
+    // grid offset so the dot pattern flows toward the camera at
+    // the same speed as the floor stripes / podiums / ropes
+    // (which are scrolled by `speed * dt` per frame and recycle
+    // at z = 4). `this.distance` accumulates speed × dt every
+    // frame in the main update loop, so we just hand it through.
     if (this.ledCeilingMat) {
       this.ledCeilingMat.uniforms.uTime.value = t;
       this.ledCeilingMat.uniforms.uBrightness.value = brightness;
+      this.ledCeilingMat.uniforms.uScroll.value = this.distance;
     }
   }
 
