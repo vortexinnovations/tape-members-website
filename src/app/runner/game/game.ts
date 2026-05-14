@@ -1701,7 +1701,7 @@ export class RunnerGame {
       // multiplier to taste. Mixamo's clean skin weights handle
       // uniform scaling cleanly (the old SIZE > 1 stretch bug was
       // specific to the procedurally-bound asset).
-      const DANCER_HEIGHT = 1.7 * 1.5;
+      const DANCER_HEIGHT = 1.7 * 1.35;
       const dancerScale = DANCER_HEIGHT / srcHeight;
       // Y-offset so the dancer's feet land at plinthTop after
       // scaling, then lower by one body height to bring her down
