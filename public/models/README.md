@@ -12,7 +12,9 @@ runtime:
 | `runner_fall_male.glb` | Game-over fall animation character (male) | ~3 MB |
 | `runner_fall_female.glb` | Game-over fall animation character (female) | ~925 KB |
 | `runner_bouncer.glb` | Dancing-bouncer obstacle (shared across all sessions) | ~2.7 MB |
-| `dancer_female.glb` | Static T-pose dancer inside each podium cage (cloned 10×, procedurally swayed) | ~2.9 MB |
+| `dancer_animated.glb` | Hip-hop dancing dancer cloned into each podium cage | ~1.4 MB |
+| `dancer_female.glb` | (Legacy) Static T-pose source mesh for the OLD procedural-sway dancer | ~2.9 MB |
+| `dance_anim.glb` | (Legacy) Mixamo skeleton + clip used by `tools/build_dancer_anim.mjs` | ~480 KB |
 
 If a player or jump file is missing, the game silently falls back
 to the in-code capsule-stack placeholder character (player) or the
@@ -21,63 +23,177 @@ game-over fires immediately (no death animation) — same payload,
 just no on-screen collapse before Flutter's play-again sheet
 appears. No errors, no broken state in any of these fallback paths.
 
-## Asset pipeline — converting from Mixamo
+---
 
-The raw Mixamo FBX exports are ~50 MB each because they ship with
-~36 large uncompressed textures per character. We run them through
-a 3-step pipeline to produce the small `.glb` files committed
-here (17–22× reduction with no visible quality loss):
+## ⭐ Future Claude — adding a Mixamo FBX to the game
+
+**Self-note: this is the canonical happy path. Do it exactly this
+way unless something has fundamentally changed. Do NOT improvise a
+Node-based FBX→GLB pipeline; the binary tool below works and the
+Node path is a swamp (textures fail to decode, jsdom polyfills go
+stale, the GLTFExporter has Issues).**
+
+### Step 0 — Verify the FBX is what you think it is
+
+Confirm the FBX has the mesh + rig + animation embedded:
 
 ```bash
-# 1. FBX → GLB (Facebook FBX2glTF binary, bundled via the fbx2gltf
-#    npm package). Installs once at the repo root:
-#      npm install --no-save fbx2gltf
-#    Binary path on Windows:
-#      node_modules/fbx2gltf/bin/Windows_NT/FBX2glTF.exe
-node_modules/fbx2gltf/bin/Windows_NT/FBX2glTF.exe \
-  -i /path/to/Mixamo.fbx \
-  -o /tmp/step1 \
-  -b
-
-# 2. Resize textures to 1024×1024 max.
-npx @gltf-transform/cli@latest resize \
-  /tmp/step1.glb /tmp/step2.glb --width 1024 --height 1024
-
-# 3. Re-encode textures to webp (much smaller than PNG/JPG for
-#    this character art style).
-npx @gltf-transform/cli@latest webp /tmp/step2.glb /tmp/final.glb
+ls -la "/path/to/source.fbx"          # check size (~5–60 MB typical)
 ```
 
-**Do NOT use** `gltf-transform optimize` or `flatten` or `join` —
-those operations break SkinnedMesh bind poses. The two ops above
-(resize + webp) are the only ones that preserve animation
-correctly.
+A 1–2 MB FBX is usually animation-only (downloaded from Mixamo with
+"Without Skin"). For the game we need "With Skin" downloads which
+are usually 8–60 MB.
 
-## Mixamo download checklist (free, no royalties)
+### Step 1 — Install FBX2glTF (one-time, idempotent)
 
-1. Sign in at https://www.mixamo.com (free Adobe account)
-2. **Pick a character** (or upload your own). For the male player
-   we use a suited Mixamo character; for the female we use a
-   dressed character.
-3. **Animation** — click the **Animations** tab, search for the
-   one you want (e.g. **"Running"** for the run loop, **"Jump"**
-   for the jump). Pick one that loops cleanly for run; the jump
-   should start + end on the takeoff/landing pose.
-4. **In Place: ON** for run (checkbox in the right panel — the
-   character runs on the spot, not drifting forward). For jump,
-   leave it on too so the character stays at origin during the
-   leap.
-5. **Download settings**:
-   - Format: **FBX Binary (.fbx)**
-   - Skin: **With Skin** (critical — we need the textured mesh,
-     not animation-only)
-   - Frames per Second: **30**
-   - Keyframe Reduction: **None**
-6. Run the 3-step pipeline above
-7. Drop the resulting `.glb` into this folder
-8. Commit + deploy — `git add public/models/*.glb && vercel --prod`
+```bash
+cd /c/projects/tape_members_website
+npm install --no-save fbx2gltf
+# Binary lands at: node_modules/fbx2gltf/bin/Windows_NT/FBX2glTF.exe
+```
 
-## License notes
+The `--no-save` keeps `package.json` clean — it's a build-time-only
+tool. If `node_modules/@gltf-transform/*` gets nuked by this
+install (it sometimes does), re-install both:
+`npm install --no-save fbx2gltf @gltf-transform/core @gltf-transform/extensions @gltf-transform/functions`.
+
+### Step 2 — Run the 3-step asset pipeline
+
+```bash
+# A. FBX → GLB (preserves rig, animation, textures, materials).
+"node_modules/fbx2gltf/bin/Windows_NT/FBX2glTF.exe" \
+  -i "/absolute/path/to/source.fbx" \
+  -o "/tmp/step1" \
+  -b
+
+# B. Downscale textures to 1024px max edge.
+npx --yes @gltf-transform/cli@latest resize \
+  /tmp/step1.glb /tmp/step2.glb \
+  --width 1024 --height 1024
+
+# C. Re-encode textures from PNG/JPEG → webp (3–5× smaller).
+npx --yes @gltf-transform/cli@latest webp \
+  /tmp/step2.glb /tmp/final.glb
+```
+
+Expected size trajectory for a typical Mixamo dancer FBX:
+9 MB → 5.6 MB → 3.0 MB → **1.4 MB final**.
+
+**Do NOT use** `gltf-transform optimize`, `flatten`, `join`, or
+`simplify` on a skinned mesh — those operations break SkinnedMesh
+bind poses. Resize + webp are the only safe ops on rigged assets.
+
+### Step 3 — Verify the GLB
+
+```bash
+npx --yes @gltf-transform/cli@latest inspect /tmp/final.glb | tail -50
+```
+
+Confirm:
+- 1 mesh with `JOINTS_0`, `WEIGHTS_0` vertex attributes (= rigged)
+- ≥ 1 material with `baseColorTexture` slot
+- ≥ 1 animation with non-trivial duration + channels
+
+If the rig is missing (no `JOINTS_0`), the source FBX was
+animation-only — re-download from Mixamo as "With Skin".
+
+### Step 4 — Deploy
+
+```bash
+cp /tmp/final.glb /c/projects/tape_members_website/public/models/<TARGET>.glb
+```
+
+For the dancer: `dancer_animated.glb`. For a new runner character:
+`runner_male.glb` / `runner_female.glb` etc. (overwrites are fine).
+
+### Step 5 — Adjust runtime fit constants in `game.ts`
+
+The dancer loader (`loadDancerVisuals`) auto-derives `dancerScale`
+from the GLB's bbox so swapping the asset doesn't require touching
+the scale formula. But you usually need to tune three constants
+near the top of that function to match the new asset's
+proportions + bind-pose quirks:
+
+```typescript
+const DANCER_HEIGHT = 1.7 * 1.5;   // target on-screen metres (= 1.5× human)
+const DANCER_LIFT = 0.7;           // raise feet above plinth (Mixamo's bind pose bbox runs taller than visible)
+const DANCER_INWARD = 0.8;         // step toward runway centre
+```
+
+Iterate with the user — they'll eyeball values and ask for
+"+0.2 m higher", "+0.3 m inward", etc. Apply the deltas directly
+to these constants. No need to re-bake or re-pipeline the GLB
+for positional changes.
+
+Rotation logic for facing direction:
+```typescript
+clone.rotation.y = isLeftSide ? Math.PI / 2 : -Math.PI / 2;
+```
+Sign flips this to face the opposite way (away vs toward runway).
+
+### Step 6 — Commit + push
+
+```bash
+git -C /c/projects/tape_members_website add public/models/<TARGET>.glb src/app/runner/game/game.ts
+git -C /c/projects/tape_members_website commit -m "Runner: replace <TARGET> with <description>"
+git -C /c/projects/tape_members_website push origin master
+```
+
+Vercel auto-deploys on push to master. Live in ~1 minute.
+
+---
+
+## Pre-FBX: getting the dancer ready for Mixamo
+
+The hard part is usually upstream of this repo — getting an FBX
+that Mixamo's Auto-Rigger accepts. Workflow summary, in order of
+preference:
+
+### Preferred: Mixamo directly auto-rigs the Tripo3D static mesh
+
+1. Generate the character in Tripo3D (https://tripo3d.ai). Settings:
+   - **Topology: Quad** (better Mixamo joint detection)
+   - **Polycount: 15,000–20,000** (sweet spot; 5K too low, 50K
+     can choke the auto-rigger)
+   - **PBR: ON**
+   - **Texture: ON, 4K** (we downscale later)
+   - **Critical: prompt must produce T-pose** — "T-pose, arms
+     outstretched horizontally to the sides, palms down, standing
+     upright". A-pose works sometimes; arms-by-sides never works.
+2. Tripo3D downloads as GLB by default. For Mixamo, convert to FBX
+   in Blender (`File → Import → glTF 2.0`, then
+   `File → Export → FBX`). Use "Selected Objects" + "Apply
+   Modifiers" + embed textures via the "Copy" + box-icon Path Mode.
+3. Upload FBX to mixamo.com → Upload Character.
+4. **Manual marker placement screen** appears — drag the 8 circles
+   onto chin / wrists / elbows / knees / groin on the T-pose
+   preview. Mixamo auto-rigs in ~60 s.
+5. Search for animation → Download with: **FBX Binary**,
+   **With Skin**, **30 FPS**, no keyframe reduction.
+
+### Why Tripo3D → FBX direct is preferred over AccuRIG → strip → FBX
+
+AccuRIG (Reallusion) produces its own rig with CC_Base_* bone
+naming, which Mixamo's auto-rigger can't map → "**Sorry, unable to
+map your existing skeleton**" error. We tried stripping the
+AccuRIG armature in Blender and re-uploading — still failed because
+of leftover vertex groups OR because the mesh became too dense
+post-AccuRIG (1.3M verts, ~4× the Tripo3D source).
+
+### Mixamo upload errors and fixes
+
+| Error | Cause | Fix |
+|---|---|---|
+| "Unable to map your existing skeleton" | FBX has armature OR vertex groups Mixamo can't recognise | Strip armature in Blender (`X` on Armature row), delete all vertex groups (Object Data Properties → Vertex Groups → ⋮ → Delete All Groups), re-export |
+| Same error after strip | Possibly polygon count too high | Decimate in Blender to ~30K polys before re-exporting |
+| Same error persists | Skeleton metadata buried in FBX | Export as **OBJ + MTL + textures** instead, zip them together, upload the zip (OBJ format has no concept of skeletons, forces Mixamo to use Auto-Rigger) |
+| Character is sideways / wrong orientation | FBX axis convention not Y-up | Blender export options: Forward = `-Z Forward`, Up = `Y Up` |
+| Auto-Rigger placed bones outside body | Mesh isn't in T-pose | Re-pose in Blender or re-generate at Tripo3D with T-pose prompt |
+
+---
+
+## License notes (Mixamo)
 
 Mixamo characters and animations are free for personal and commercial
 use under Adobe's terms (no royalties, no attribution required, no
@@ -86,70 +202,89 @@ subscription needed). The license forbids reselling the raw `.fbx` /
 game) is the intended use case. See https://www.mixamo.com/faq for
 details.
 
-## Implementation notes (for future maintainers)
+---
 
-The loader (`game.ts` → `tryLoadGltfPlayer` for the running
-character, `loadJumpCharacter` for the jump character,
-`loadFallCharacter` for the fall character):
+## Runtime implementation notes
 
-- auto-scales the model to match `PLAYER.HEIGHT` (1.8 m)
-- offsets the feet to the ground using foot-bone world-Y detection
-- rotates 180° around Y so the character faces away from the
-  camera (running into the screen)
-- picks the first animation clip whose name contains
-  "run" / "running" / "jog" / "walk" for the player; uses
-  `animations[0]` for the jump and the fall
-- strips root-bone X+Z position keyframes at runtime
+The runner / jump / fall loaders (`game.ts` → `tryLoadGltfPlayer`,
+`loadJumpCharacter`, `loadFallCharacter`) all:
+
+- auto-scale the model to match `PLAYER.HEIGHT` (1.8 m)
+- offset feet to ground using foot-bone world-Y detection
+- rotate 180° around Y so the character faces away from camera
+- pick the first animation clip whose name contains
+  "run" / "running" / "jog" / "walk" for the player; use
+  `animations[0]` for jump and fall
+- strip root-bone X+Z position keyframes at runtime
   (`stripRootForwardMotion`) so the character stays put while
   the world scrolls past
 
-The jump and fall characters are rendered as **separate visible
-entities**, not as clips retargeted onto the running character —
-applying a Mixamo "without skin" clip to a "with skin" character
-produces twisted joints due to subtle bind-pose orientation
-differences. The three-characters approach (run + jump + fall)
-sidesteps that entirely. Each GLB runs its own embedded animation
-against its own native skeleton. Visibility flips between them on
-jump trigger / landing / game-over.
+Jump and fall are rendered as **separate visible entities**, not
+as clips retargeted onto the running character — applying a Mixamo
+"without skin" clip to a "with skin" character produces twisted
+joints due to subtle bind-pose orientation differences. Each GLB
+runs its own embedded animation against its own native skeleton;
+visibility flips between them on jump trigger / landing / game-over.
 
-Game-over flow specifically: `endGame()` builds the payload, stashes
-it in `pendingGameOver`, flips `isFalling = true`, hides the runner,
-shows the fall character, and starts the fall action (LoopOnce +
+`endGame()` flow: builds the payload → stashes in
+`pendingGameOver` → flips `isFalling = true` → hides runner →
+shows fall character → starts fall action (LoopOnce +
 clampWhenFinished). The rAF loop keeps ticking `playerFallMixer`
 even though `running` is false. When the clip's `finished` event
-fires (`installFallCharacter` wires the listener), `postGameOverFromFall`
-ships the stashed payload to Flutter — which is what surfaces the
-play-again sheet. If the fall GLB never loaded, `endGame()` skips
-the death animation and posts immediately.
+fires, `postGameOverFromFall` ships the stashed payload to Flutter.
+If the fall GLB never loaded, `endGame()` skips animation and posts
+immediately.
 
-## Dancer figures inside the podium cages
+### Dancer (loadDancerVisuals)
 
-`dancer_female.glb` is a special case — it's a **static T-pose mesh
-with NO skeleton**. Generated via Tripo3D, but Mixamo + AccuRIG both
-refuse to auto-rig AI-generated topology, so we sidestep the
-problem entirely: parent one clone inside each podium cage and
-apply procedural sway in `tickDancers()`:
+The dancer loader is more permissive — it computes scale + offset
+from the GLB's bbox at load time:
 
-- Twist around vertical axis (±14°, period ~3.5 s) — torso checking out the crowd
-- Vertical bob (±0.04 m, period ~1.6 s) — knee-bounce on the downbeat
-- Side sway in X (±0.05 m, period ~5 s) — hip shift
+```typescript
+const srcBbox = new THREE.Box3().setFromObject(gltf.scene);
+const srcHeight = bbox.max.y - bbox.min.y;
+const DANCER_HEIGHT = 1.7 * 1.5;     // target on-screen height
+const DANCER_LIFT = 0.7;             // taste-tune
+const DANCER_INWARD = 0.8;           // toward runway centre
+const dancerScale = DANCER_HEIGHT / srcHeight;
+const feetOffsetY =
+  plinthTop - srcBbox.min.y * dancerScale - DANCER_HEIGHT + DANCER_LIFT;
+```
 
-Per-podium phase offsets so adjacent dancers are out of sync. At
-the viewing distance (5+ m from camera) + speed (~1 second per
-podium pass) + occluded by the LED cage bars, this reads
-indistinguishably from full skeletal animation.
+Uniform parent scale is safe on Mixamo-rigged GLBs because the
+inverse bind matrices encode rest-pose transforms correctly. The
+**SIZE > 1 stretch bug we used to fight** was specific to the
+procedurally-bound `dancer_female.glb` (computed via
+`tools/bind_dancer.mjs` using bone-distance heuristics). That asset
+is retained as `dancer_female.glb` for reference but no longer
+loaded by the game.
 
-Asset pipeline note: the dancer GLB skips Mixamo entirely and is
-processed via `FBX2glTF → gltf-transform resize 1024 → webp encode
-→ gltf-transform simplify --ratio 0.1` to bring its 131k-tri
-source down to ~13k tris (10 clones × 13k = 130k tris total,
-well within mobile webview budget).
+---
 
-If a different character source is used (Quaternius, Kenney,
-custom Blender export), make sure the model:
+## Legacy: the procedural-bind dancer pipeline
 
-- exports as glTF Binary (`.glb`)
-- has its pivot at the feet (Mixamo default)
-- includes at least one animation clip per file
-- ships with the skin baked in (the loaded scene should contain
-  a `THREE.SkinnedMesh`)
+(Kept for historical context; not used by the current game.)
+
+`tools/bind_dancer.mjs` + `tools/build_dancer_anim.mjs` used to
+take a static T-pose Tripo3D mesh + a Mixamo skeleton+anim GLB
+(`dance_anim.glb`) and procedurally compute skin weights via
+bone-segment distance. Output:
+[old] `dancer_animated.glb` ~5 MB, locked to SIZE=1 due to
+SkinnedMesh + scaled-parent bindMatrix mismatch.
+
+Superseded by the FBX2glTF pipeline above — Mixamo's auto-rig
+produces clean inverse-bind matrices that scale cleanly.
+
+---
+
+## If a different character source is used
+
+Quaternius, Kenney, Sketchfab, custom Blender export — the model
+must:
+
+- export as glTF Binary (`.glb`)
+- have its pivot at the feet (Mixamo default; not always true for
+  other sources — check by loading in https://gltf.report)
+- include at least one animation clip
+- ship with skin baked in (loaded scene should contain a
+  `THREE.SkinnedMesh`, not just `THREE.Mesh`)
