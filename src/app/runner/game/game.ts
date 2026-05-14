@@ -1687,6 +1687,28 @@ export class RunnerGame {
       if (!animClip) return; // baked GLB missing the clip — bail silently
 
       const plinthTop = 0.5;
+
+      // Compute the source mesh's bbox once so we can derive a
+      // size-normalising scale and feet-on-plinth offset that work
+      // regardless of how the GLB was authored (Mixamo's auto-rig
+      // tends to land at ~1 m with origin at the hip; older
+      // procedurally-bound assets baked their own size in). Using
+      // the bbox makes the runner robust to future asset swaps.
+      const srcBbox = new THREE.Box3().setFromObject(gltf.scene);
+      const srcHeight = Math.max(srcBbox.max.y - srcBbox.min.y, 0.001);
+      // Target dancer height in metres. 1.7 m reads as a proper
+      // person on the 0.5-m plinths. Bump this up if you want
+      // larger-than-life dancers — Mixamo's clean skin weights
+      // handle uniform scaling cleanly (the old SIZE > 1 stretch
+      // bug was specific to the procedurally-bound asset).
+      const DANCER_HEIGHT = 1.7;
+      const dancerScale = DANCER_HEIGHT / srcHeight;
+      // Y-offset so the dancer's feet land at plinthTop after
+      // scaling. min.y is in source-asset space, scaled by
+      // dancerScale gives world-space feet position before any
+      // group transform — subtract that to plant her on the plinth.
+      const feetOffsetY = plinthTop - srcBbox.min.y * dancerScale;
+
       for (let i = 0; i < this.dancerPodiums.length; i++) {
         const podium = this.dancerPodiums[i];
 
@@ -1697,13 +1719,11 @@ export class RunnerGame {
         // instance.
         const clone = cloneSkinned(gltf.scene);
 
-        // Position at the plinth top, facing the runway. Left-side
-        // dancer (X < 0) faces +X, right-side faces -X. The clone
-        // already carries the fit×display scale internally (baked
-        // by the offline tool), so no additional scale is applied
-        // here — that would trigger the bind-matrix mismatch we
-        // hit in the earlier runtime-bake attempts.
-        clone.position.y = plinthTop;
+        // Apply the size + feet-on-plinth offset uniformly. The
+        // dancer's GLB is Mixamo-rigged so uniform parent scale
+        // doesn't disturb the bind matrices.
+        clone.scale.setScalar(dancerScale);
+        clone.position.y = feetOffsetY;
         const isLeftSide = podium.group.position.x < 0;
         const sideSign = isLeftSide ? -1 : 1;
         clone.rotation.y = isLeftSide ? -Math.PI / 2 : Math.PI / 2;
