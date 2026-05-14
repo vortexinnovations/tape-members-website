@@ -50,6 +50,14 @@ export type InitPayload = {
      * white-clipping the brand palette.
      */
     brightness?: number;
+    /**
+     * Per-feature multiplier for the LED ceiling on top of the
+     * master `brightness`. 0 = ceiling completely off, 0.7 =
+     * stock (slightly darker than the rest of the room), 1.0 =
+     * matches master brightness, 2.0 = blown out. Clamped to
+     * [0, 2] on the game side.
+     */
+    ceilingBrightness?: number;
     // ── Spawn pacing (Three.js only) ────────────────────────────
     pickupIntervalSeconds?: number;
     obstacleIntervalSeconds?: number;

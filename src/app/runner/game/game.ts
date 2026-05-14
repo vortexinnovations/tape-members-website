@@ -127,6 +127,15 @@ export class RunnerGame {
    * is the only way "make it brighter" actually does anything.)
    */
   private brightnessMultiplier = 1.0;
+  /**
+   * Per-feature multiplier for the LED ceiling on top of the
+   * global brightnessMultiplier. Admin-tunable via
+   * `games/runner.ceilingBrightness` (clamped to [0, 2]) so the
+   * ceiling can be dimmed without dimming the rest of the rig.
+   * Default 0.7 is "slightly darker than the rest of the room"
+   * which matches typical Tape lighting balance.
+   */
+  private ceilingBrightnessMultiplier = 0.7;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private clock = new THREE.Clock();
@@ -1402,7 +1411,8 @@ export class RunnerGame {
   private buildLEDCeiling() {
     const CEILING_W = 16;        // wide enough to span runway + podiums
     const CEILING_LENGTH = 200;  // matches ground length
-    const CEILING_Y = 6.0;       // above cage tops (3.5 m) + headroom
+    const CEILING_Y = 8.5;       // well above cage tops (3.5 m), reads as
+                                 // proper club ceiling height
     const CEILING_Z = -90;       // matches ground centre
 
     // Grid resolution — 40 dots across × 200 along ≈ 8,000 lights.
@@ -1489,10 +1499,19 @@ export class RunnerGame {
           0.55 + 0.45 *
           (0.5 + 0.5 * sin(uTime * 1.8 + cellId.x * 0.9 + cellId.y * 0.35));
 
-        vec3 finalColor = color * breathe * uBrightness;
-        // Alpha mirrors the dot mask so the gaps between dots are
-        // fully transparent (no flat dark backing card).
-        gl_FragColor = vec4(finalColor, dotMask);
+        // Depth fade — dim the distant end of the ceiling so the
+        // grid recedes into the dark instead of staying full
+        // brightness all the way out. vUv.y = 0 is the far end
+        // (z = -190), vUv.y = 1 is just behind the camera. Fade
+        // smoothly over the lower 0–0.55 range so the visible
+        // distant portion fades to near-black.
+        float depthFade = smoothstep(0.0, 0.55, vUv.y);
+
+        vec3 finalColor = color * breathe * uBrightness * depthFade;
+        // Alpha mirrors the dot mask × depth fade so the gaps
+        // between dots are fully transparent and the distant
+        // dots fade out cleanly.
+        gl_FragColor = vec4(finalColor, dotMask * depthFade);
       }
     `;
 
@@ -3039,9 +3058,14 @@ export class RunnerGame {
     // (which are scrolled by `speed * dt` per frame and recycle
     // at z = 4). `this.distance` accumulates speed × dt every
     // frame in the main update loop, so we just hand it through.
+    // Ceiling uses the master brightness × its own per-feature
+    // multiplier so admins can dim the ceiling without dimming
+    // the rest of the room (Tape's ceiling is typically darker
+    // than the floor / podium fixtures anyway).
     if (this.ledCeilingMat) {
       this.ledCeilingMat.uniforms.uTime.value = t;
-      this.ledCeilingMat.uniforms.uBrightness.value = brightness;
+      this.ledCeilingMat.uniforms.uBrightness.value =
+        brightness * this.ceilingBrightnessMultiplier;
       this.ledCeilingMat.uniforms.uScroll.value = this.distance;
     }
   }
@@ -4308,6 +4332,18 @@ export class RunnerGame {
         this.brightnessMultiplier = b;
         this.ambientLight.intensity = this.ambientBaseIntensity * b;
         this.houseLight.intensity = this.houseBaseIntensity * b;
+      }
+      // Per-feature ceiling LED brightness on top of the master
+      // multiplier. Default 0.7 (slightly darker than the rest of
+      // the room). Range 0..2 — 0 = ceiling off, 2 = blown out.
+      if (
+        typeof s.ceilingBrightness === 'number' &&
+        Number.isFinite(s.ceilingBrightness)
+      ) {
+        this.ceilingBrightnessMultiplier = Math.max(
+          0,
+          Math.min(2, s.ceilingBrightness),
+        );
       }
 
       // ── Sound effects ──────────────────────────────────────
