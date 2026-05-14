@@ -35,7 +35,11 @@ const io = new NodeIO().registerExtensions(ALL_EXTENSIONS);
 // Display size multiplier on top of the auto fit-to-mesh scale.
 // 1.0 = "match mesh's native height" (the offline-binding scale).
 // 2.0 = double size. Adjustable here without affecting runtime.
-const SIZE = 2.0;
+// May 14, 2026 — kept at 1.0 because SIZE > 1 surfaces a Three.js
+// SkinnedMesh + scaled-parent skinning artefact we haven't fully
+// chased down yet (joints stretch/skew under animation). Re-bake
+// only when that's solved.
+const SIZE = 1.0;
 
 // 20 major bones for skin weighting. Order matters — defines the
 // joint index order in JOINTS_0. Same list as the original
