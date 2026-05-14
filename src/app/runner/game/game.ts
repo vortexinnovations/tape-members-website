@@ -3998,8 +3998,11 @@ export class RunnerGame {
         });
 
         // Face the camera (running player approaches from +Z) so
-        // the dance reads from the front.
-        visual.rotation.y = Math.PI;
+        // the animation reads from the front. `visualRotationY`
+        // overrides per spec — Mixamo bind poses can vary, so the
+        // bouncer FBX (already facing +Z) uses 0 while the dancer
+        // FBX (facing -Z) uses the default π.
+        visual.rotation.y = spec.visualRotationY ?? Math.PI;
 
         // Parent into the collider first so getWorldPosition reflects
         // the full chain (collider → visual → Armature → bone).
@@ -4057,7 +4060,12 @@ export class RunnerGame {
           const measuredH = highHeadY - lowFootY;
           scaleFactor = spec.height / measuredH;
         }
-        visual.scale.setScalar(scaleFactor);
+        // Extra per-spec scale on top of the auto-fit (defaults to
+        // 1.0). Lets a spec render visually larger than its
+        // collision profile — e.g. a 2× bouncer that still has a
+        // jump-clearable hitbox.
+        const visualExtraScale = spec.visualScale ?? 1.0;
+        visual.scale.setScalar(scaleFactor * visualExtraScale);
         visual.updateMatrixWorld(true);
 
         // Re-measure foot Y after scaling so we can drop the model

@@ -172,6 +172,23 @@ export interface ObstacleSpec {
   airOnly: boolean;
   // Reason sent back to Flutter for the game-over panel headline.
   failReason: 'speakerHit' | 'dancerHit' | 'bouncerHit' | 'discoBallHit';
+  /**
+   * Y-axis rotation applied to the visual after bind-pose import.
+   * Mixamo characters typically face -Z, so π flips them to face +Z
+   * (toward the player). FBX exports from different sources may
+   * have inverted axes — override to 0 (or another angle) when
+   * the bind-pose orientation already matches what we want.
+   * Defaults to π in the spawn code when undefined.
+   */
+  visualRotationY?: number;
+  /**
+   * Extra uniform scale multiplier applied on top of the auto-fit
+   * (which fits the rig height to `height`). Use to make a visual
+   * appear LARGER than its collision profile — e.g. an intimidating
+   * 2× bouncer that gameplay-wise still collides like a normal
+   * obstacle. Defaults to 1.0.
+   */
+  visualScale?: number;
 }
 
 export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
@@ -201,7 +218,13 @@ export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
     failReason: 'dancerHit',
   },
   // Actual bouncer — intimidating arms-crossed character blocking
-  // the lane. Same collision profile as dancer.
+  // the lane. Collision profile matches the dancer (jump-clearable
+  // 1.2 × 2.05 × 0.75 box), but the VISUAL is rendered 2× the
+  // collision size so the bouncer reads as physically imposing —
+  // the player's feet pass over the same jump threshold but the
+  // bouncer towers above them. Bouncer FBX bind pose already faces
+  // +Z, so no rotation flip (visualRotationY = 0 overrides the
+  // default π that the dancer uses).
   bouncer: {
     kind: 'bouncer',
     weight: 3,
@@ -212,6 +235,8 @@ export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
     baseY: 1.025,
     airOnly: false,
     failReason: 'bouncerHit',
+    visualRotationY: 0,
+    visualScale: 2.0,
   },
   discoBall: {
     kind: 'discoBall',
