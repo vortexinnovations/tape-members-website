@@ -1744,6 +1744,20 @@ export class RunnerGame {
       }
 
       const plinthTop = 0.5;
+      // First-time diagnostic: dump every node name in the cloned
+      // skeleton so we can confirm whether Three.js's GLTFLoader is
+      // sanitizing the Mixamo "mixamorig:" colons into underscores
+      // (which would silently break our literal name lookups).
+      {
+        const probe = animRoot.clone(true);
+        const allNames: string[] = [];
+        probe.traverse((o) => allNames.push(o.name));
+        // eslint-disable-next-line no-console
+        console.log('[dancer] cloned skeleton has', allNames.length, 'nodes');
+        // eslint-disable-next-line no-console
+        console.log('[dancer] sample names:', allNames.slice(0, 8));
+      }
+
       for (let i = 0; i < this.dancerPodiums.length; i++) {
         const podium = this.dancerPodiums[i];
         // Each podium gets its own deep clone of the skeleton so
@@ -1763,23 +1777,32 @@ export class RunnerGame {
         wrapper.add(skeletonClone);
 
         // Collect the 20 major bones in the same order the offline
-        // script used (this is the index order in skinIndex).
+        // script used (this is the index order in skinIndex). We
+        // accept both the original "mixamorig:Hips" form and the
+        // sanitised "mixamorig_Hips" — different GLTF parsers and
+        // exporters disagree on whether to preserve colons. The
+        // first form found wins; we also strip any "Object_" prefix
+        // some pipelines add.
         const bones: THREE.Bone[] = [];
         for (const boneName of meta.bones) {
+          const candidates = [
+            boneName,
+            boneName.replace(/:/g, '_'),
+            boneName.replace(/:/g, ''),
+          ];
           let found: THREE.Bone | null = null;
           skeletonClone.traverse((obj) => {
             if (found) return;
-            if (obj.name === boneName) {
-              // Treat plain Object3D as Bone (Three.js auto-detects
-              // skinned hierarchies; for our externally-built skin
-              // the type label matters only for AnimationMixer
-              // targeting, which works either way).
-              found = obj as THREE.Bone;
+            for (const cand of candidates) {
+              if (obj.name === cand) {
+                found = obj as THREE.Bone;
+                return;
+              }
             }
           });
           if (!found) {
             // eslint-disable-next-line no-console
-            console.warn(`[dancer] missing bone: ${boneName}`);
+            console.warn(`[dancer] missing bone: ${boneName} (tried: ${candidates.join(', ')})`);
             return; // bail — incomplete skeleton can't drive the mesh
           }
           bones.push(found);
