@@ -361,12 +361,21 @@ export class RunnerGame {
   private champagneLabelTexture?: THREE.CanvasTexture;
 
   /**
-   * Cached GLTF for the bouncer obstacle (dancing character). Loaded
+   * Cached GLTF for the dancer obstacle (dancing character on the
+   * dancefloor — was called "bouncer" until we noticed the
+   * animation is actually a dance). Loaded
    * once on construction, then SkeletonUtils.clone'd per spawn so
-   * each bouncer instance has its own skeleton + independent
+   * each dancer instance has its own skeleton + independent
    * AnimationMixer. Undefined while the load is in flight or if
    * the file is missing — spawnObstacle falls back to the procedural
    * capsule-stack humanoid in that case.
+   */
+  private dancerObstacleGltf?: GLTF;
+
+  /**
+   * Cached GLTF for the (actual) bouncer obstacle — intimidating
+   * arms-crossed character blocking the lane. Same per-instance
+   * SkeletonUtils.clone treatment as the dancer obstacle.
    */
   private bouncerGltf?: GLTF;
 
@@ -724,10 +733,11 @@ export class RunnerGame {
     // Default visual — used until init() arrives with a real
     // playerGender. Treated as a neutral/male silhouette.
     this.buildPlayerVisual('');
-    // Kick off the async bouncer model load. It'll typically arrive
-    // before the first bouncer spawns (~1.6s into the run); any
-    // bouncers that spawn before it lands use the procedural
+    // Kick off the async character-model loads. They'll typically
+    // land before the first obstacle spawns (~1.6 s into the run);
+    // any obstacles that spawn before they land use the procedural
     // humanoid fallback automatically.
+    this.loadDancerObstacleModel();
     this.loadBouncerModel();
     // Jump character load is gender-aware — fired from
     // `buildPlayerVisual` once we know which character to load.
@@ -1305,10 +1315,27 @@ export class RunnerGame {
   }
 
   /**
-   * One-shot load of the bouncer character GLB. Failure is silently
-   * swallowed — spawnObstacle's bouncer branch falls back to the
+   * One-shot load of the dancer-obstacle character GLB (the
+   * dancefloor dancer that blocks the lane). Failure is silently
+   * swallowed — spawnObstacle's dancer branch falls back to the
    * procedural humanoid (capsule torso + sphere head + crossed
    * arms) so the game keeps working without the model.
+   */
+  private async loadDancerObstacleModel() {
+    try {
+      this.dancerObstacleGltf =
+        await new GLTFLoader().loadAsync('/models/runner_dancer.glb');
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.debug('[runner] dancer obstacle model load failed', e);
+    }
+  }
+
+  /**
+   * One-shot load of the bouncer character GLB (the actual,
+   * intimidating bouncer). Failure is silently swallowed —
+   * spawnObstacle's bouncer branch falls back to the procedural
+   * humanoid so the game keeps working without the model.
    */
   private async loadBouncerModel() {
     try {
@@ -3050,8 +3077,8 @@ export class RunnerGame {
           | undefined;
         if (spinTarget) spinTarget.rotation.y += dt * 1.4;
       }
-      // Bouncers carry a per-instance AnimationMixer driving their
-      // dance loop. Tick each independently.
+      // Dancers + bouncers carry a per-instance AnimationMixer
+      // driving their animation loop. Tick each independently.
       o.mixer?.update(dt);
       if (o.mesh.position.z > WORLD.DESPAWN_Z) {
         this.scene.remove(o.mesh);
@@ -3061,13 +3088,17 @@ export class RunnerGame {
           o.mixer.stopAllAction();
           o.mixer.uncacheRoot(o.mixer.getRoot());
         }
-        // For GLB-cloned bouncers, geometry + materials are SHARED
-        // across all clones via SkeletonUtils.clone. Disposing them
-        // on one despawn would break every other live bouncer.
-        // We only dispose the per-instance bits (the invisible
-        // collider's BoxGeometry + its MeshBasicMaterial) and let
-        // the shared GLTF resources stay alive until game dispose.
-        if (o.spec.kind === 'bouncer' && o.mixer) {
+        // For GLB-cloned dancers + bouncers, geometry + materials
+        // are SHARED across all clones via SkeletonUtils.clone.
+        // Disposing them on one despawn would break every other
+        // live instance. We only dispose the per-instance bits
+        // (the invisible collider's BoxGeometry + its
+        // MeshBasicMaterial) and let the shared GLTF resources
+        // stay alive until game dispose.
+        if (
+          (o.spec.kind === 'dancer' || o.spec.kind === 'bouncer') &&
+          o.mixer
+        ) {
           o.mesh.geometry.dispose();
           const cm = o.mesh.material;
           if (Array.isArray(cm)) cm.forEach((m) => m.dispose());
@@ -3922,14 +3953,24 @@ export class RunnerGame {
       return { mesh };
     }
 
-    if (spec.kind === 'bouncer') {
-      // GLB-backed bouncer — preferred path when the cached
-      // bouncer GLTF is loaded. Each spawn gets its own
-      // SkeletonUtils.clone so its dance animation runs on an
+    if (spec.kind === 'dancer' || spec.kind === 'bouncer') {
+      // GLB-backed humanoid obstacle — preferred path when the
+      // cached GLTF is loaded. Each spawn gets its own
+      // SkeletonUtils.clone so its animation runs on an
       // independent skeleton + AnimationMixer (otherwise all
-      // bouncers would dance in perfect sync, which looks
+      // dancers/bouncers would loop in perfect sync, which looks
       // unnervingly mechanical).
-      const gltf = this.bouncerGltf;
+      //
+      // Two flavours of this branch:
+      //   - 'dancer' uses runner_dancer.glb (dancefloor character,
+      //     was previously called "bouncer" — the GLB shows the
+      //     dance, not a real bouncer pose)
+      //   - 'bouncer' uses runner_bouncer.glb (the actual,
+      //     arms-crossed bouncer character)
+      // Same collision + alignment logic; differs only by which
+      // GLTF is cloned in.
+      const gltf =
+        spec.kind === 'dancer' ? this.dancerObstacleGltf : this.bouncerGltf;
       if (gltf) {
         const colliderGeo = new THREE.BoxGeometry(
           spec.width,
@@ -4637,6 +4678,7 @@ export class RunnerGame {
       // ── Obstacle weight overrides ───────────────────────────
       const obstacleWeightKeys: Array<[ObstacleKind, keyof typeof s]> = [
         ['speaker', 'speakerWeight'],
+        ['dancer', 'dancerWeight'],
         ['bouncer', 'bouncerWeight'],
         ['discoBall', 'discoBallWeight'],
       ];
@@ -4657,6 +4699,7 @@ export class RunnerGame {
       > = [
         ['blackout', 'gameOverBlackoutHeadline', 'gameOverBlackoutSubtitle'],
         ['speakerHit', 'gameOverSpeakerHeadline', 'gameOverSpeakerSubtitle'],
+        ['dancerHit', 'gameOverDancerHeadline', 'gameOverDancerSubtitle'],
         ['bouncerHit', 'gameOverBouncerHeadline', 'gameOverBouncerSubtitle'],
         [
           'discoBallHit',
@@ -4782,7 +4825,10 @@ export class RunnerGame {
         o.mixer.stopAllAction();
         o.mixer.uncacheRoot(o.mixer.getRoot());
       }
-      if (o.spec.kind === 'bouncer' && o.mixer) {
+      if (
+        (o.spec.kind === 'dancer' || o.spec.kind === 'bouncer') &&
+        o.mixer
+      ) {
         // Shared GLTF — only dispose the invisible collider's
         // per-instance geometry + material (mirrors the despawn
         // path's logic).
@@ -4967,11 +5013,20 @@ export class RunnerGame {
     // bottle sprites; dispose it explicitly once the scene traversal
     // can't (since we hand the same texture to multiple materials).
     this.champagneLabelTexture?.dispose();
-    // Dispose the shared bouncer GLTF geometry/materials. By this
-    // point all bouncer clones have been removed from the scene, so
+    // Dispose the shared dancer/bouncer obstacle GLTFs. By this
+    // point all their clones have been removed from the scene, so
     // there's nothing left referencing the shared resources.
-    if (this.bouncerGltf) {
-      this.bouncerGltf.scene.traverse((obj) => {
+    for (const gltfRef of [
+      { get: () => this.dancerObstacleGltf, clear: () => {
+        this.dancerObstacleGltf = undefined;
+      } },
+      { get: () => this.bouncerGltf, clear: () => {
+        this.bouncerGltf = undefined;
+      } },
+    ]) {
+      const gltf = gltfRef.get();
+      if (!gltf) continue;
+      gltf.scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh || obj instanceof THREE.SkinnedMesh) {
           obj.geometry.dispose();
           const m = obj.material;
@@ -4979,7 +5034,7 @@ export class RunnerGame {
           else this.disposeMaterial(m);
         }
       });
-      this.bouncerGltf = undefined;
+      gltfRef.clear();
     }
     this.renderer.dispose();
   }

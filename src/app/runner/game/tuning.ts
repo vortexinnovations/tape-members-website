@@ -149,7 +149,7 @@ export function rollPickup(): PickupSpec {
 //   - discoBall — ceiling-hung, kills only while airborne. Player
 //     dodges by NOT jumping (or by lane change). Inverted Y rule
 //     from the floor obstacles.
-export type ObstacleKind = 'speaker' | 'bouncer' | 'discoBall';
+export type ObstacleKind = 'speaker' | 'dancer' | 'bouncer' | 'discoBall';
 
 export interface ObstacleSpec {
   kind: ObstacleKind;
@@ -171,7 +171,7 @@ export interface ObstacleSpec {
    */
   airOnly: boolean;
   // Reason sent back to Flutter for the game-over panel headline.
-  failReason: 'speakerHit' | 'bouncerHit' | 'discoBallHit';
+  failReason: 'speakerHit' | 'dancerHit' | 'bouncerHit' | 'discoBallHit';
 }
 
 export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
@@ -186,14 +186,30 @@ export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
     airOnly: false,
     failReason: 'speakerHit',
   },
-  bouncer: {
-    kind: 'bouncer',
+  // Dancing character on the dancefloor — what we used to call
+  // "bouncer" until we realised the animation IS a dance. Still
+  // hits the player same as a real obstacle: jump-clearable.
+  dancer: {
+    kind: 'dancer',
     weight: 4,
     width: 1.1,
     height: 1.95,
     depth: 0.7,
     color: 0x2a1010,
     baseY: 0.975,
+    airOnly: false,
+    failReason: 'dancerHit',
+  },
+  // Actual bouncer — intimidating arms-crossed character blocking
+  // the lane. Same collision profile as dancer.
+  bouncer: {
+    kind: 'bouncer',
+    weight: 3,
+    width: 1.2,
+    height: 2.05,
+    depth: 0.75,
+    color: 0x1a0a0a,
+    baseY: 1.025,
     airOnly: false,
     failReason: 'bouncerHit',
   },
@@ -231,9 +247,13 @@ export const DEATH_COPY = {
     headline: 'OOF',
     subtitle: 'You ran into a speaker.',
   },
-  bouncerHit: {
+  dancerHit: {
     headline: 'WRONG MOVE',
     subtitle: 'You crashed the dance floor.',
+  },
+  bouncerHit: {
+    headline: 'DENIED',
+    subtitle: 'The bouncer caught you.',
   },
   discoBallHit: {
     headline: 'GLITTER BOMB',

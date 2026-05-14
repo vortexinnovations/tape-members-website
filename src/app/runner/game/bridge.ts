@@ -108,6 +108,16 @@ export type InitPayload = {
     methuselahScore?: number;
     // ── Obstacle spawn weights (Three.js only) ──────────────────
     speakerWeight?: number;
+    /**
+     * Dancing character on the dancefloor (used to be called
+     * "bouncer" but the animation is a dance). Jump-clearable.
+     */
+    dancerWeight?: number;
+    /**
+     * Actual bouncer obstacle — intimidating arms-crossed
+     * character blocking the lane. Same collision profile as
+     * dancer. Jump-clearable.
+     */
     bouncerWeight?: number;
     discoBallWeight?: number;
     // ── Sound effects (Three.js only) ───────────────────────────
@@ -164,6 +174,8 @@ export type InitPayload = {
     gameOverBlackoutSubtitle?: string;
     gameOverSpeakerHeadline?: string;
     gameOverSpeakerSubtitle?: string;
+    gameOverDancerHeadline?: string;
+    gameOverDancerSubtitle?: string;
     gameOverBouncerHeadline?: string;
     gameOverBouncerSubtitle?: string;
     gameOverDiscoBallHeadline?: string;
@@ -210,6 +222,7 @@ export type GameOverMessage = {
   reason:
     | 'blackout'
     | 'speakerHit'
+    | 'dancerHit'
     | 'bouncerHit'
     | 'discoBallHit'
     | 'manual';
