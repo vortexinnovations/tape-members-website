@@ -1709,14 +1709,14 @@ export class RunnerGame {
       // bbox runs taller than the visible feet-to-head range,
       // so the "feet at plinthTop" formula floated her). The
       // small `DANCER_LIFT` raises her again to taste.
-      const DANCER_LIFT = 0.5;
+      const DANCER_LIFT = 0.7;
       const feetOffsetY =
         plinthTop - srcBbox.min.y * dancerScale - DANCER_HEIGHT + DANCER_LIFT;
       // Step inward (toward the runway centre) so dancers crowd
       // the edge of the plinth instead of standing flush at the
       // back. Negated `sideSign` because sideSign points AWAY
       // from the centreline.
-      const DANCER_INWARD = 0.5;
+      const DANCER_INWARD = 0.8;
 
       for (let i = 0; i < this.dancerPodiums.length; i++) {
         const podium = this.dancerPodiums[i];
