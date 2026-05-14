@@ -1707,8 +1707,16 @@ export class RunnerGame {
       // scaling, then lower by one body height to bring her down
       // to a reasonable on-podium position (Mixamo's bind pose
       // bbox runs taller than the visible feet-to-head range,
-      // so the "feet at plinthTop" formula floated her).
-      const feetOffsetY = plinthTop - srcBbox.min.y * dancerScale - DANCER_HEIGHT;
+      // so the "feet at plinthTop" formula floated her). The
+      // small `DANCER_LIFT` raises her again to taste.
+      const DANCER_LIFT = 0.5;
+      const feetOffsetY =
+        plinthTop - srcBbox.min.y * dancerScale - DANCER_HEIGHT + DANCER_LIFT;
+      // Step inward (toward the runway centre) so dancers crowd
+      // the edge of the plinth instead of standing flush at the
+      // back. Negated `sideSign` because sideSign points AWAY
+      // from the centreline.
+      const DANCER_INWARD = 0.5;
 
       for (let i = 0; i < this.dancerPodiums.length; i++) {
         const podium = this.dancerPodiums[i];
@@ -1727,6 +1735,9 @@ export class RunnerGame {
         clone.position.y = feetOffsetY;
         const isLeftSide = podium.group.position.x < 0;
         const sideSign = isLeftSide ? -1 : 1;
+        // Nudge toward the runway centre. The podium positions are
+        // already set; this is a local-space tweak on top of them.
+        clone.position.x = -sideSign * DANCER_INWARD;
         // Face the runway. Mixamo's bind pose faces -Z, so a
         // left-side dancer (X < 0) needs +π/2 around Y to look
         // at +X (toward the runway centre); right-side gets -π/2.
