@@ -1504,11 +1504,11 @@ export class RunnerGame {
 
         // Depth fade — dim the distant end of the ceiling so the
         // grid recedes into the dark instead of staying full
-        // brightness all the way out. vUv.y = 0 is the far end
-        // (z = -190), vUv.y = 1 is just behind the camera. Fade
-        // smoothly over the lower 0–0.55 range so the visible
-        // distant portion fades to near-black.
-        float depthFade = smoothstep(0.0, 0.55, vUv.y);
+        // brightness all the way out. After the geometry's
+        // rotateX(-π/2), vUv.y = 0 is the NEAR end (just behind
+        // the camera) and vUv.y = 1 is the FAR end (z = -190).
+        // We want bright near, dark far → fade based on (1 - vUv.y).
+        float depthFade = smoothstep(0.0, 0.55, 1.0 - vUv.y);
 
         vec3 finalColor = color * breathe * uBrightness * depthFade;
         // Alpha mirrors the dot mask × depth fade so the gaps
