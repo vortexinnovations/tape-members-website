@@ -250,34 +250,35 @@ export class RunnerGame {
     phase: number;
   }[] = [];
   /**
-   * Procedurally-animated dancer figures slotted inside each podium
-   * cage (May 14, 2026). Static T-pose meshes — no skeletal animation
-   * — but we apply a small sin-wave twist + bob + sway per frame so
-   * the dancers feel "alive" without needing a full rig.
+   * Skinned dancer figures slotted inside each podium cage
+   * (May 14, 2026). The Tripo3D-generated GLB has no skeleton —
+   * Mixamo + AccuRIG both refuse to auto-rig AI-generated
+   * topology. We sidestep that by computing skin weights
+   * OFFLINE via bone-proximity (see `bind_dancer.mjs`), then
+   * constructing a Three.js SkinnedMesh at RUNTIME from three
+   * pieces:
    *
-   * Why no skeletal animation: auto-rigging the Tripo-generated GLB
-   * via Mixamo / AccuRIG failed (Tripo's bone structure doesn't map
-   * to Mixamo's, and AI-gen topology trips automatic skinning). At
-   * the viewing distance + speed the player sees each podium pass
-   * (~1 second per pass, behind LED cage bars), the difference
-   * between a fully-animated dancer and a swaying T-pose statue is
-   * imperceptible — but the procedural sway gives the eye motion
-   * to lock onto, which is what reads as "she's dancing."
+   *   1. `/models/dancer_female.glb`     — static Tripo mesh
+   *   2. `/models/dance_anim.glb`        — Mixamo skeleton + clip
+   *   3. `/models/dance_skin_joints.bin` + `dance_skin_weights.bin`
+   *      + `dance_skin_meta.json`        — per-vertex bone weights
    *
-   * The mesh is loaded once and cloned per podium (geometry +
-   * material are SHARED across clones — only the transform is
-   * unique). 10 podiums × 1 shared mesh = trivial GPU cost.
+   * The bones (20 of the 53 Mixamo bones — major joints only,
+   * fingers + toes dropped) are scaled + offset to fit the
+   * mesh's 1m-tall coordinate frame. Per-vertex weights pick
+   * the 4 nearest bones via inverse-square distance. Animation
+   * mixer drives the skeleton; vertices follow via the weights.
    *
-   * Each entry stores the podium's X sign (left vs right) so the
-   * tick can keep the dancer's base rotation pointing inward
-   * toward the runway.
+   * Each podium gets its own SkinnedMesh + AnimationMixer so the
+   * dancers can be out of phase (offset clip times for variety —
+   * adjacent podiums shouldn't perform the same beat in unison).
    */
   private dancerVisuals: {
-    mesh: THREE.Group;
-    phase: number;
+    /** The wrapper Group containing the scaled skeleton + mesh. */
+    root: THREE.Group;
+    mixer: THREE.AnimationMixer;
     /** -1 for left-side podiums, +1 for right-side — used to flip
-     *  the base rotation so the dancer faces the runway, not the
-     *  back wall. */
+     *  the base rotation so the dancer faces the runway. */
     sideSign: number;
   }[] = [];
   private pickups: ActivePickup[] = [];
@@ -1634,110 +1635,207 @@ export class RunnerGame {
   }
 
   /**
-   * Load `dancer_female.glb` and clone it into each podium cage.
+   * Load the dancer asset trio (static mesh + Mixamo skeleton +
+   * skin-weights binary) and assemble a SkinnedMesh inside each
+   * podium cage with an animation mixer playing the dance loop.
    *
-   * Asset is a static T-pose mesh (no skeleton) generated via
-   * Tripo3D — see `public/models/README.md` for the pipeline +
-   * the "why no skeletal rig" rationale. We sidestep the missing
-   * skeletal animation with procedural sway in `tickDancers()`
-   * which at viewing distance + speed reads as "she's dancing."
+   * The offline binding script (`bind_dancer.mjs`) computed
+   * per-vertex weights against 20 major bones of the Mixamo
+   * skeleton, scaled + offset to fit our 1m-tall Tripo mesh.
+   * Runtime job: load all three pieces, construct a Three.js
+   * `Skeleton` from the scaled bone tree, build a SkinnedMesh
+   * using the original mesh geometry + our computed skinIndex/
+   * skinWeight attributes, and drive it with an AnimationMixer
+   * pointed at the bundled clip.
    *
-   * Each podium gets a clone() — geometry + material are SHARED
-   * across the 10 clones (Three.js convention for clone(true)),
-   * so the GPU only stores one copy of the dancer's mesh data.
-   * Only the local transform differs per clone.
+   * Each podium gets its own clone of the skeleton + its own
+   * mixer so dancers can be out of phase — adjacent podiums
+   * shouldn't all be on beat 0 of the loop. Mesh geometry +
+   * texture are shared across clones (Three.js convention),
+   * so 10 dancers = ~1× GPU memory footprint of one.
    *
-   * The dancer is parented to the podium's Group so when the
-   * podium scrolls/recycles in the update loop, the dancer
-   * scrolls with it for free — no separate bookkeeping needed.
-   *
-   * Failure is silent — cages stay empty, podiums still look
-   * great. Same fallback ethos as the bouncer model.
+   * Failure-silent: if any of the four files 404s, cages stay
+   * empty — podiums still look great.
    */
   private async loadDancerVisuals() {
     try {
-      const gltf = await new GLTFLoader().loadAsync('/models/dancer_female.glb');
-      const template = gltf.scene;
-      // Compute the source mesh's bounding-box height once so each
-      // clone gets the same scale applied. Tripo's GLB exports at
-      // ~1 m tall (normalized) — we want each dancer ~1.7 m so she
-      // reads as a real human standing on the 0.5 m plinth.
-      const bbox = new THREE.Box3().setFromObject(template);
-      const sourceHeight = Math.max(0.01, bbox.max.y - bbox.min.y);
-      const targetHeight = 1.7;
-      const scale = targetHeight / sourceHeight;
-      const plinthTop = 0.5; // matches PLINTH_H in buildDancerPodiums
+      // ── Fetch all four assets in parallel ───────────────────
+      const [meshGltf, animGltf, joints0, weights0, meta] = await Promise.all([
+        new GLTFLoader().loadAsync('/models/dancer_female.glb'),
+        new GLTFLoader().loadAsync('/models/dance_anim.glb'),
+        fetch('/models/dance_skin_joints.bin').then((r) => r.arrayBuffer()),
+        fetch('/models/dance_skin_weights.bin').then((r) => r.arrayBuffer()),
+        fetch('/models/dance_skin_meta.json').then((r) => r.json()) as Promise<{
+          vertCount: number;
+          scale: number;
+          offsetY: number;
+          bones: string[];
+        }>,
+      ]);
 
-      // SkinnedMesh frustum-cull guard isn't needed here (these are
-      // static THREE.Mesh, no skinning), but the same general
-      // performance-vs-correctness trade-off applies. Skip it.
+      // ── Extract the source mesh from the static GLB ─────────
+      let sourceMesh: THREE.Mesh | null = null;
+      meshGltf.scene.traverse((obj) => {
+        if (sourceMesh) return;
+        if (obj instanceof THREE.Mesh) sourceMesh = obj;
+      });
+      if (!sourceMesh) {
+        console.debug('[runner] dancer mesh has no Mesh child');
+        return;
+      }
+      const sm = sourceMesh as THREE.Mesh;
+
+      // ── Verify vertex count matches the weights ─────────────
+      const positionAttr = sm.geometry.getAttribute('position');
+      if (positionAttr.count !== meta.vertCount) {
+        console.debug(
+          `[runner] dancer vert count mismatch: mesh=${positionAttr.count} weights=${meta.vertCount}`,
+        );
+        return;
+      }
+
+      // ── Build the shared geometry with skinIndex+skinWeight ─
+      // skinIndex must be Uint16BufferAttribute (4 per vertex);
+      // skinWeight is Float32 (4 per vertex). Both attributes are
+      // added to a CLONE of the geometry so we don't mutate the
+      // original (multiple SkinnedMesh instances can share this
+      // skinned-geometry, since the skinning math depends only
+      // on attributes + skeleton — which is per-instance).
+      const skinnedGeo = sm.geometry.clone();
+      skinnedGeo.setAttribute(
+        'skinIndex',
+        new THREE.Uint16BufferAttribute(new Uint16Array(joints0), 4),
+      );
+      skinnedGeo.setAttribute(
+        'skinWeight',
+        new THREE.BufferAttribute(new Float32Array(weights0), 4),
+      );
+      const sharedMaterial = sm.material;
+
+      // ── Find the prefab scaling root for the Mixamo skeleton ─
+      // animGltf.scene is the original Mixamo bone tree at native
+      // ~1.41m scale. Each clone of the skeleton wraps it inside a
+      // Group with our computed scale + offsetY so the skeleton's
+      // T-pose aligns with the mesh's 1m-tall coordinate frame.
+      const animRoot = animGltf.scene;
+      const animClip = animGltf.animations[0];
+      if (!animClip) {
+        console.debug('[runner] dance anim has no clip');
+        return;
+      }
+
+      const plinthTop = 0.5;
       for (let i = 0; i < this.dancerPodiums.length; i++) {
         const podium = this.dancerPodiums[i];
-        const clone = template.clone(true);
-        clone.scale.setScalar(scale);
-        // Feet at top of plinth — bbox.min.y is the source mesh's
-        // lowest point (typically 0 after Tripo's Bottom Center
-        // Pivot setting), so we lift by plinthTop minus that.
-        clone.position.set(0, plinthTop - bbox.min.y * scale, 0);
-        // Face the runway: left-side podium (negative X) → dancer
-        // faces +X; right-side (positive X) → faces -X. Tripo's
-        // model faces +Z by default in its source orientation, so
-        // a ±π/2 Y rotation aims her sideways. (No Math.PI flip
-        // like the runner; the dancer should face IN toward the
-        // runway, not away from it like the runner does.)
+        // Each podium gets its own deep clone of the skeleton so
+        // animation state is independent per dancer. SkeletonUtils
+        // would preserve bone-name uniqueness across clones, but
+        // since each dancer's skeleton lives in a separate Group
+        // and AnimationMixer targets the root, plain Object3D
+        // clone(true) works (Three.js' clone preserves the tree
+        // structure + name references that the AnimationClip uses).
+        const skeletonClone = animRoot.clone(true);
+
+        // Wrapper group carries the fit transform AND the runway-
+        // facing rotation. Children inherit both.
+        const wrapper = new THREE.Group();
+        wrapper.scale.setScalar(meta.scale);
+        wrapper.position.y = meta.offsetY;
+        wrapper.add(skeletonClone);
+
+        // Collect the 20 major bones in the same order the offline
+        // script used (this is the index order in skinIndex).
+        const bones: THREE.Bone[] = [];
+        for (const boneName of meta.bones) {
+          let found: THREE.Bone | null = null;
+          skeletonClone.traverse((obj) => {
+            if (found) return;
+            if (obj.name === boneName) {
+              // Treat plain Object3D as Bone (Three.js auto-detects
+              // skinned hierarchies; for our externally-built skin
+              // the type label matters only for AnimationMixer
+              // targeting, which works either way).
+              found = obj as THREE.Bone;
+            }
+          });
+          if (!found) {
+            console.debug(`[runner] missing bone: ${boneName}`);
+            return; // bail — incomplete skeleton can't drive the mesh
+          }
+          bones.push(found);
+        }
+
+        // Compute inverse bind matrices from the bones' CURRENT
+        // world matrices (which reflect the wrapper's scale +
+        // offset). Must update the world matrices before reading
+        // them — Three.js doesn't recompute lazily.
+        wrapper.updateMatrixWorld(true);
+        const inverseBindMatrices = bones.map((b) => {
+          const inv = new THREE.Matrix4();
+          inv.copy(b.matrixWorld).invert();
+          return inv;
+        });
+
+        // Build the skeleton + skinned mesh.
+        const skeleton = new THREE.Skeleton(bones, inverseBindMatrices);
+        const skinnedMesh = new THREE.SkinnedMesh(skinnedGeo, sharedMaterial);
+        // The skin needs to be parented OUTSIDE the scaled wrapper
+        // so its world transform isn't doubly-scaled. The skin's
+        // bones come from inside the wrapper (already scaled), and
+        // the skinning math uses those bones' world matrices —
+        // which already include the scale. So the skinned mesh's
+        // own transform should be identity in world space.
+        // Disable frustum culling: SkinnedMesh bounding spheres
+        // come from the bind pose, but the dance pose can extend
+        // outside that sphere (arms raised, etc.).
+        skinnedMesh.frustumCulled = false;
+        skinnedMesh.bind(skeleton);
+        // Add to the same wrapper as the skeleton so transforms
+        // align (the wrapper's scale applies to both mesh and
+        // bones uniformly).
+        wrapper.add(skinnedMesh);
+
+        // Mixer drives the skeleton; clip targets bones by name
+        // (mixamorig:Hips, etc.) which are present in skeletonClone.
+        const mixer = new THREE.AnimationMixer(skeletonClone);
+        const action = mixer.clipAction(animClip);
+        action.setLoop(THREE.LoopRepeat, Infinity);
+        action.play();
+        // Offset each dancer's clip time by a different amount so
+        // adjacent podiums aren't on the same beat. Clip is 21.96s.
+        mixer.setTime(i * 1.4); // 14% of clip length per podium
+
+        // Place the wrapper inside the cage: feet at top of plinth.
+        wrapper.position.y = plinthTop + meta.offsetY;
+        // Face the runway: left-side faces +X, right-side faces -X.
         const isLeftSide = podium.group.position.x < 0;
         const sideSign = isLeftSide ? -1 : 1;
-        clone.rotation.y = isLeftSide ? -Math.PI / 2 : Math.PI / 2;
-        // Parent to the podium group. Now when the podium scrolls
-        // (handled in the update loop), the dancer goes with it.
-        podium.group.add(clone);
-        // Store with a per-dancer phase offset so they don't all
-        // sway in unison — staggered like the LED pulse wave.
+        wrapper.rotation.y = isLeftSide ? -Math.PI / 2 : Math.PI / 2;
+        // Parent to the podium so it scrolls with the cage for free.
+        podium.group.add(wrapper);
+
         this.dancerVisuals.push({
-          mesh: clone,
-          phase: i * 0.7,
+          root: wrapper,
+          mixer,
           sideSign,
         });
       }
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.debug('[runner] dancer model load failed', e);
+      console.debug('[runner] dancer assembly failed', e);
     }
   }
 
   /**
-   * Per-frame procedural sway for the dancers. Three superimposed
-   * sin waves give "she's moving to the music" without any
-   * skeletal animation:
-   *
-   *   1. Twist around vertical axis (±0.25 rad ≈ ±14°) — her
-   *      torso rotates left/right like she's checking out the
-   *      crowd. Period ~3.5 s.
-   *   2. Vertical bob (±0.04 m) — feels like a knee-bounce on
-   *      the music's downbeat. Period ~1.6 s.
-   *   3. Side sway in the X direction (±0.05 m) — her hips
-   *      shift side to side. Period ~5 s, deliberately slow so
-   *      it doesn't fight the twist.
-   *
-   * Per-podium phase offset means adjacent dancers are in
-   * different parts of the cycle — the row reads as multiple
-   * performers each doing their own thing, not a synchronized
-   * routine.
+   * Drive each dancer's AnimationMixer by `dt`. Mixers are
+   * independent per dancer so they stay at their own clip-time
+   * offset; the staggered start positions (set in load) plus a
+   * shared dt keep adjacent dancers visibly out of sync.
    */
-  private tickDancers(t: number) {
+  private tickDancers(dt: number) {
     if (this.dancerVisuals.length === 0) return;
-    const plinthTop = 0.5;
     for (const d of this.dancerVisuals) {
-      const phase = t + d.phase;
-      // Base rotation: same ±π/2 as installed, then add a small
-      // twist. d.sideSign is -1 / +1 so the base orientation flips
-      // for left vs right podiums.
-      const baseRot = d.sideSign * (Math.PI / 2);
-      d.mesh.rotation.y = baseRot + Math.sin(phase * 1.8) * 0.25;
-      // Vertical bob — relative to the plinth top.
-      d.mesh.position.y = plinthTop + Math.sin(phase * 4.0) * 0.04;
-      // Side sway in local X — small, slow.
-      d.mesh.position.x = Math.sin(phase * 1.25) * 0.05;
+      d.mixer.update(dt);
     }
   }
 
@@ -2430,10 +2528,12 @@ export class RunnerGame {
       // scene reads as "live nightclub" while the swipe-to-start
       // overlay is up.
       this.tickDancerPodiums(this.previewClock);
-      // Same goes for the dancer sway — keeps them moving while
-      // the overlay is up. Without this they'd be frozen statues
-      // until the player swipes.
-      this.tickDancers(this.previewClock);
+      // Same goes for the dancer animation — keeps the clip
+      // looping while the overlay is up. Without this they'd be
+      // frozen on their bind pose until the player swipes.
+      // Note: tickDancers takes `dt`, not the clock (it advances
+      // each per-dancer AnimationMixer by the per-frame delta).
+      this.tickDancers(dt);
       this.runPlayerIdleAnimation(this.previewClock, dt);
       return;
     }
@@ -2570,10 +2670,12 @@ export class RunnerGame {
       if (p.group.position.z > 4) p.group.position.z -= 90;
     }
 
-    // ── Animate club lights + dancer podium LED pulse ─────────
+    // ── Animate club lights + dancer podium LED pulse + dance loops
     this.tickClubLights(this.duration);
     this.tickDancerPodiums(this.duration);
-    this.tickDancers(this.duration);
+    // tickDancers takes `dt` (advances each dancer's mixer by the
+    // per-frame delta), unlike the time-clock-driven LED pulse.
+    this.tickDancers(dt);
 
     // ── Scroll pickups, check collection / pass ────────────────
     for (let i = this.pickups.length - 1; i >= 0; i--) {
