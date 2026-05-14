@@ -33,8 +33,20 @@ export class AudioManager {
   /** Index into each pool, advanced round-robin on play(). */
   private cursors = new Map<string, number>();
   /** URL each key is loaded from, so we can skip re-loading on
-   *  init() calls that pass the same URLs. */
+   *  init() calls that pass the same URLs. One-shots and loops
+   *  use namespaced keys ('jump' vs 'loop:running') so a key reused
+   *  between the two types doesn't collide. */
   private loadedUrls = new Map<string, string>();
+
+  /** Loop instances — separate from `pools` because looping needs
+   *  exactly ONE dedicated `<audio>` per key. round-robin doesn't
+   *  apply (there's nothing to interrupt), and the lifecycle is
+   *  start/stop rather than one-shot fire-and-forget. */
+  private loops = new Map<string, HTMLAudioElement>();
+  /** Loops the caller has requested be playing. Survives transient
+   *  pauses (browser autoplay rejection, lifecycle pauseLoops()) so
+   *  resumeLoops() / unmute can resurrect them automatically. */
+  private loopWantPlaying = new Set<string>();
 
   private _mutedByUser = false;
   private _enabledByAdmin = true;
@@ -78,6 +90,7 @@ export class AudioManager {
     } catch {
       // ignore localStorage write failures
     }
+    this._syncLoopsToMute();
     this.onMuteChanged?.(this.muted);
   }
 
@@ -88,11 +101,49 @@ export class AudioManager {
   setEnabledByAdmin(enabled: boolean): void {
     if (this._enabledByAdmin === enabled) return;
     this._enabledByAdmin = enabled;
+    this._syncLoopsToMute();
     this.onMuteChanged?.(this.muted);
   }
 
   setMasterVolume(volume: number): void {
     this._masterVolume = Math.max(0, Math.min(1, volume));
+    // Live loops need the new volume immediately — one-shots pick
+    // it up on their next play() call.
+    for (const audio of this.loops.values()) {
+      try {
+        audio.volume = this._masterVolume;
+      } catch {
+        // ignore — element may be in a transitional state
+      }
+    }
+  }
+
+  /** Internal: bring loops into agreement with the current mute
+   *  state. Mute → pause every loop (intent preserved in
+   *  `loopWantPlaying`). Unmute → resume each loop the caller had
+   *  requested via playLoop(). */
+  private _syncLoopsToMute(): void {
+    if (this.muted) {
+      for (const audio of this.loops.values()) {
+        try {
+          audio.pause();
+        } catch {
+          // ignore
+        }
+      }
+      return;
+    }
+    for (const [key, audio] of this.loops) {
+      if (!this.loopWantPlaying.has(key)) continue;
+      try {
+        audio.volume = this._masterVolume;
+        audio.play().catch(() => {
+          // autoplay rejection — next user gesture will succeed
+        });
+      } catch {
+        // ignore
+      }
+    }
   }
 
   /**
@@ -151,6 +202,120 @@ export class AudioManager {
     }
   }
 
+  /**
+   * Preload (or replace) a looping SFX (e.g. running footsteps).
+   * Unlike one-shots, each key gets exactly ONE `<audio>` element
+   * marked `loop = true`. Calling with an empty URL stops + drops
+   * the loop. Re-calling with the same URL is a no-op.
+   *
+   * If `playLoop(key)` was called BEFORE the URL was loaded, this
+   * starts the loop immediately on the new element (and respects
+   * current mute state).
+   */
+  loadLoop(key: string, url: string): void {
+    const cacheKey = `loop:${key}`;
+    if (!url) {
+      this.stopLoop(key);
+      this.loops.delete(key);
+      this.loadedUrls.delete(cacheKey);
+      return;
+    }
+    if (this.loadedUrls.get(cacheKey) === url) return;
+    const existing = this.loops.get(key);
+    if (existing) {
+      try {
+        existing.pause();
+        existing.src = '';
+      } catch {
+        // ignore
+      }
+    }
+    const audio = new Audio(url);
+    audio.preload = 'auto';
+    audio.loop = true;
+    this.loops.set(key, audio);
+    this.loadedUrls.set(cacheKey, url);
+    // If the game asked for this loop before its URL landed, kick
+    // it off now (subject to mute).
+    if (this.loopWantPlaying.has(key) && !this.muted) {
+      try {
+        audio.volume = this._masterVolume;
+        audio.play().catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  /**
+   * Start (or restart) a loop. Records the caller's intent so the
+   * loop survives mute / lifecycle pause and auto-resumes on
+   * unmute. No-op if no URL is loaded for the key — but the intent
+   * is still recorded, so a later `loadLoop()` will start it.
+   */
+  playLoop(key: string): void {
+    this.loopWantPlaying.add(key);
+    if (this.muted) return;
+    const audio = this.loops.get(key);
+    if (!audio) return;
+    try {
+      audio.volume = this._masterVolume;
+      audio.play().catch(() => {
+        // autoplay rejection — next user gesture will succeed
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  /** Stop a loop and forget the caller's intent. The audio
+   *  element stays loaded for cheap re-start later. */
+  stopLoop(key: string): void {
+    this.loopWantPlaying.delete(key);
+    const audio = this.loops.get(key);
+    if (!audio) return;
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Pause every loop without clearing intent. Used by the bridge's
+   * pause() entry — the player is backgrounding the app or the
+   * Flutter wrapper is mid-transition; we want silence but want
+   * resumeLoops() to bring the same loops back.
+   */
+  pauseLoops(): void {
+    for (const audio of this.loops.values()) {
+      try {
+        audio.pause();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  /**
+   * Resume any loops that had been started before pauseLoops().
+   * Skipped if currently muted (mute already enforces silence;
+   * unmuting will catch this set via _syncLoopsToMute).
+   */
+  resumeLoops(): void {
+    if (this.muted) return;
+    for (const [key, audio] of this.loops) {
+      if (!this.loopWantPlaying.has(key)) continue;
+      try {
+        audio.volume = this._masterVolume;
+        audio.play().catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   /** Stop all sounds (used on dispose / page hide). */
   stopAll(): void {
     for (const pool of this.pools.values()) {
@@ -163,12 +328,22 @@ export class AudioManager {
         }
       }
     }
+    for (const audio of this.loops.values()) {
+      try {
+        audio.pause();
+        audio.currentTime = 0;
+      } catch {
+        // ignore
+      }
+    }
+    this.loopWantPlaying.clear();
   }
 
   dispose(): void {
     this.stopAll();
     this.pools.clear();
     this.cursors.clear();
+    this.loops.clear();
     this.loadedUrls.clear();
   }
 }

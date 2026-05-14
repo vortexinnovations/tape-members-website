@@ -2346,6 +2346,7 @@ export class RunnerGame {
     // scaled base value (slower at high buzz).
     const slow = this.buzz.getInterpolatedEffectParams().laneSlowFactor;
     this.laneChangeDuration = this.laneChangeBaseSeconds * slow;
+    this.audio.play('lanechange');
   }
   private jump() {
     if (this.gameOver || !this.running || !this.assetsReady) return;
@@ -2403,6 +2404,11 @@ export class RunnerGame {
     this.distance = 0;
     this.score = 0;
     this.hud.hideInputHint();
+    // Kick off the looping run SFX. Tied to first input so the loop
+    // doesn't blare on the static start screen. AudioManager records
+    // the intent even if the URL hasn't finished loading yet —
+    // loadLoop()'s deferred-start branch will pick it up.
+    this.audio.playLoop('running');
   }
 
   // ── Game loop ───────────────────────────────────────────────────
@@ -4051,6 +4057,11 @@ export class RunnerGame {
       if (typeof s.sfxWaterUrl === 'string') this.audio.load('water', s.sfxWaterUrl);
       if (typeof s.sfxComboUrl === 'string') this.audio.load('combo', s.sfxComboUrl);
       if (typeof s.sfxGameOverUrl === 'string') this.audio.load('gameover', s.sfxGameOverUrl);
+      if (typeof s.sfxLaneChangeUrl === 'string') this.audio.load('lanechange', s.sfxLaneChangeUrl);
+      // Running loop — single dedicated element, marked loop=true.
+      // Starts on first player input (startGameIfNotStarted) so we
+      // don't blare the loop on a static start screen.
+      if (typeof s.sfxRunningUrl === 'string') this.audio.loadLoop('running', s.sfxRunningUrl);
 
       // ── Combo tier overrides ───────────────────────────────
       // Three tiers above the baseline (which is always 0/×1.0).
@@ -4238,12 +4249,17 @@ export class RunnerGame {
 
   pause() {
     this.running = false;
+    // Silence any active loops without forgetting them — the
+    // running loop should pick up exactly where it left off when
+    // the app comes back to the foreground.
+    this.audio.pauseLoops();
   }
 
   resume() {
     if (this.gameOver) return;
     this.clock.getDelta(); // reset delta so resume doesn't ff
     this.running = true;
+    this.audio.resumeLoops();
   }
 
   /** Force-end the current run (used for spike testing). */
@@ -4381,6 +4397,10 @@ export class RunnerGame {
     this.running = false;
     // Drop the buzz blur overlay so the fall animation reads crisp.
     this.hud.setBlur(0);
+    // Silence the run loop the instant the player dies, regardless
+    // of whether the fall animation plays. Forgets the intent, so
+    // a subsequent restart()->first-swipe re-starts cleanly.
+    this.audio.stopLoop('running');
     // Fire the game-over SFX immediately — independent of whether
     // the fall animation plays. Plays once even if endGame is called
     // re-entrantly (gameOver latch above guards against that).

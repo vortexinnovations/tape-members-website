@@ -125,6 +125,15 @@ export type InitPayload = {
     sfxWaterUrl?: string;
     sfxComboUrl?: string;
     sfxGameOverUrl?: string;
+    /** Fires on every lane change (left or right swipe). */
+    sfxLaneChangeUrl?: string;
+    /**
+     * Looped background SFX. Loop starts the moment the player
+     * makes their first input (when the world starts ticking) and
+     * runs until game-over / dispose / pause. Mute + master volume
+     * apply.
+     */
+    sfxRunningUrl?: string;
     // ── Game-over copy overrides (Three.js only) ────────────────
     // Each pair (headline + subtitle) overrides the built-in
     // DEATH_COPY default for that death reason. The web sends the
