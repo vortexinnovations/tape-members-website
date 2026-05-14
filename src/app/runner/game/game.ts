@@ -1750,14 +1750,25 @@ export class RunnerGame {
       // don't redo the bbox calc per podium. Variants that failed
       // to load are filtered out — random pick draws from whatever
       // landed.
+      //
+      // `inward` is per-variant because the Mixamo bind poses for
+      // the two characters differ slightly — the dark dancer sits
+      // 1 m further back than the blonde to compensate for her
+      // wider stance / different starting frame.
       type Variant = {
         scene: THREE.Object3D;
         clip: THREE.AnimationClip;
         scale: number;
         offsetY: number;
+        inward: number;
       };
       const variants: Variant[] = [];
-      for (const gltf of [blondeGltf, darkGltf]) {
+      const sources: Array<[unknown, number]> = [
+        [blondeGltf, DANCER_INWARD],
+        [darkGltf, DANCER_INWARD - 1.0],
+      ];
+      for (const [g, inward] of sources) {
+        const gltf = g as { scene: THREE.Object3D; animations: THREE.AnimationClip[] } | null;
         if (!gltf) continue;
         const clip = gltf.animations[0];
         if (!clip) continue;
@@ -1766,7 +1777,7 @@ export class RunnerGame {
         const scale = DANCER_HEIGHT / height;
         const offsetY =
           plinthTop - bbox.min.y * scale - DANCER_HEIGHT + DANCER_LIFT;
-        variants.push({ scene: gltf.scene, clip, scale, offsetY });
+        variants.push({ scene: gltf.scene, clip, scale, offsetY, inward });
       }
       if (variants.length === 0) return; // both failed to load
 
@@ -1795,7 +1806,9 @@ export class RunnerGame {
         const sideSign = isLeftSide ? -1 : 1;
         // Nudge toward the runway centre. The podium positions are
         // already set; this is a local-space tweak on top of them.
-        clone.position.x = -sideSign * DANCER_INWARD;
+        // Per-variant inward distance so each character lands at
+        // a position that matches her bind-pose / dance stance.
+        clone.position.x = -sideSign * variant.inward;
         // Face the runway. Mixamo's bind pose faces -Z, so a
         // left-side dancer (X < 0) needs +π/2 around Y to look
         // at +X (toward the runway centre); right-side gets -π/2.
