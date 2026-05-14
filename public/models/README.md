@@ -12,6 +12,7 @@ runtime:
 | `runner_fall_male.glb` | Game-over fall animation character (male) | ~3 MB |
 | `runner_fall_female.glb` | Game-over fall animation character (female) | ~925 KB |
 | `runner_bouncer.glb` | Dancing-bouncer obstacle (shared across all sessions) | ~2.7 MB |
+| `dancer_female.glb` | Static T-pose dancer inside each podium cage (cloned 10×, procedurally swayed) | ~2.9 MB |
 
 If a player or jump file is missing, the game silently falls back
 to the in-code capsule-stack placeholder character (player) or the
@@ -120,6 +121,29 @@ fires (`installFallCharacter` wires the listener), `postGameOverFromFall`
 ships the stashed payload to Flutter — which is what surfaces the
 play-again sheet. If the fall GLB never loaded, `endGame()` skips
 the death animation and posts immediately.
+
+## Dancer figures inside the podium cages
+
+`dancer_female.glb` is a special case — it's a **static T-pose mesh
+with NO skeleton**. Generated via Tripo3D, but Mixamo + AccuRIG both
+refuse to auto-rig AI-generated topology, so we sidestep the
+problem entirely: parent one clone inside each podium cage and
+apply procedural sway in `tickDancers()`:
+
+- Twist around vertical axis (±14°, period ~3.5 s) — torso checking out the crowd
+- Vertical bob (±0.04 m, period ~1.6 s) — knee-bounce on the downbeat
+- Side sway in X (±0.05 m, period ~5 s) — hip shift
+
+Per-podium phase offsets so adjacent dancers are out of sync. At
+the viewing distance (5+ m from camera) + speed (~1 second per
+podium pass) + occluded by the LED cage bars, this reads
+indistinguishably from full skeletal animation.
+
+Asset pipeline note: the dancer GLB skips Mixamo entirely and is
+processed via `FBX2glTF → gltf-transform resize 1024 → webp encode
+→ gltf-transform simplify --ratio 0.1` to bring its 131k-tri
+source down to ~13k tris (10 clones × 13k = 130k tris total,
+well within mobile webview budget).
 
 If a different character source is used (Quaternius, Kenney,
 custom Blender export), make sure the model:

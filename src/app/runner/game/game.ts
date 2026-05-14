@@ -249,6 +249,37 @@ export class RunnerGame {
     glowMat: THREE.MeshBasicMaterial;
     phase: number;
   }[] = [];
+  /**
+   * Procedurally-animated dancer figures slotted inside each podium
+   * cage (May 14, 2026). Static T-pose meshes — no skeletal animation
+   * — but we apply a small sin-wave twist + bob + sway per frame so
+   * the dancers feel "alive" without needing a full rig.
+   *
+   * Why no skeletal animation: auto-rigging the Tripo-generated GLB
+   * via Mixamo / AccuRIG failed (Tripo's bone structure doesn't map
+   * to Mixamo's, and AI-gen topology trips automatic skinning). At
+   * the viewing distance + speed the player sees each podium pass
+   * (~1 second per pass, behind LED cage bars), the difference
+   * between a fully-animated dancer and a swaying T-pose statue is
+   * imperceptible — but the procedural sway gives the eye motion
+   * to lock onto, which is what reads as "she's dancing."
+   *
+   * The mesh is loaded once and cloned per podium (geometry +
+   * material are SHARED across clones — only the transform is
+   * unique). 10 podiums × 1 shared mesh = trivial GPU cost.
+   *
+   * Each entry stores the podium's X sign (left vs right) so the
+   * tick can keep the dancer's base rotation pointing inward
+   * toward the runway.
+   */
+  private dancerVisuals: {
+    mesh: THREE.Group;
+    phase: number;
+    /** -1 for left-side podiums, +1 for right-side — used to flip
+     *  the base rotation so the dancer faces the runway, not the
+     *  back wall. */
+    sideSign: number;
+  }[] = [];
   private pickups: ActivePickup[] = [];
   private obstacles: ActiveObstacle[] = [];
   private spawnAccumPickup = 0;
@@ -612,6 +643,10 @@ export class RunnerGame {
     this.loadBouncerModel();
     // Jump character load is gender-aware — fired from
     // `buildPlayerVisual` once we know which character to load.
+    // Fire the dancer-figure load too — populates each podium cage
+    // with a swaying T-pose dancer once the GLB arrives. Failure is
+    // silent (cages stay empty — they still look great).
+    this.loadDancerVisuals();
   }
 
   /**
@@ -1598,6 +1633,114 @@ export class RunnerGame {
     }
   }
 
+  /**
+   * Load `dancer_female.glb` and clone it into each podium cage.
+   *
+   * Asset is a static T-pose mesh (no skeleton) generated via
+   * Tripo3D — see `public/models/README.md` for the pipeline +
+   * the "why no skeletal rig" rationale. We sidestep the missing
+   * skeletal animation with procedural sway in `tickDancers()`
+   * which at viewing distance + speed reads as "she's dancing."
+   *
+   * Each podium gets a clone() — geometry + material are SHARED
+   * across the 10 clones (Three.js convention for clone(true)),
+   * so the GPU only stores one copy of the dancer's mesh data.
+   * Only the local transform differs per clone.
+   *
+   * The dancer is parented to the podium's Group so when the
+   * podium scrolls/recycles in the update loop, the dancer
+   * scrolls with it for free — no separate bookkeeping needed.
+   *
+   * Failure is silent — cages stay empty, podiums still look
+   * great. Same fallback ethos as the bouncer model.
+   */
+  private async loadDancerVisuals() {
+    try {
+      const gltf = await new GLTFLoader().loadAsync('/models/dancer_female.glb');
+      const template = gltf.scene;
+      // Compute the source mesh's bounding-box height once so each
+      // clone gets the same scale applied. Tripo's GLB exports at
+      // ~1 m tall (normalized) — we want each dancer ~1.7 m so she
+      // reads as a real human standing on the 0.5 m plinth.
+      const bbox = new THREE.Box3().setFromObject(template);
+      const sourceHeight = Math.max(0.01, bbox.max.y - bbox.min.y);
+      const targetHeight = 1.7;
+      const scale = targetHeight / sourceHeight;
+      const plinthTop = 0.5; // matches PLINTH_H in buildDancerPodiums
+
+      // SkinnedMesh frustum-cull guard isn't needed here (these are
+      // static THREE.Mesh, no skinning), but the same general
+      // performance-vs-correctness trade-off applies. Skip it.
+      for (let i = 0; i < this.dancerPodiums.length; i++) {
+        const podium = this.dancerPodiums[i];
+        const clone = template.clone(true);
+        clone.scale.setScalar(scale);
+        // Feet at top of plinth — bbox.min.y is the source mesh's
+        // lowest point (typically 0 after Tripo's Bottom Center
+        // Pivot setting), so we lift by plinthTop minus that.
+        clone.position.set(0, plinthTop - bbox.min.y * scale, 0);
+        // Face the runway: left-side podium (negative X) → dancer
+        // faces +X; right-side (positive X) → faces -X. Tripo's
+        // model faces +Z by default in its source orientation, so
+        // a ±π/2 Y rotation aims her sideways. (No Math.PI flip
+        // like the runner; the dancer should face IN toward the
+        // runway, not away from it like the runner does.)
+        const isLeftSide = podium.group.position.x < 0;
+        const sideSign = isLeftSide ? -1 : 1;
+        clone.rotation.y = isLeftSide ? -Math.PI / 2 : Math.PI / 2;
+        // Parent to the podium group. Now when the podium scrolls
+        // (handled in the update loop), the dancer goes with it.
+        podium.group.add(clone);
+        // Store with a per-dancer phase offset so they don't all
+        // sway in unison — staggered like the LED pulse wave.
+        this.dancerVisuals.push({
+          mesh: clone,
+          phase: i * 0.7,
+          sideSign,
+        });
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.debug('[runner] dancer model load failed', e);
+    }
+  }
+
+  /**
+   * Per-frame procedural sway for the dancers. Three superimposed
+   * sin waves give "she's moving to the music" without any
+   * skeletal animation:
+   *
+   *   1. Twist around vertical axis (±0.25 rad ≈ ±14°) — her
+   *      torso rotates left/right like she's checking out the
+   *      crowd. Period ~3.5 s.
+   *   2. Vertical bob (±0.04 m) — feels like a knee-bounce on
+   *      the music's downbeat. Period ~1.6 s.
+   *   3. Side sway in the X direction (±0.05 m) — her hips
+   *      shift side to side. Period ~5 s, deliberately slow so
+   *      it doesn't fight the twist.
+   *
+   * Per-podium phase offset means adjacent dancers are in
+   * different parts of the cycle — the row reads as multiple
+   * performers each doing their own thing, not a synchronized
+   * routine.
+   */
+  private tickDancers(t: number) {
+    if (this.dancerVisuals.length === 0) return;
+    const plinthTop = 0.5;
+    for (const d of this.dancerVisuals) {
+      const phase = t + d.phase;
+      // Base rotation: same ±π/2 as installed, then add a small
+      // twist. d.sideSign is -1 / +1 so the base orientation flips
+      // for left vs right podiums.
+      const baseRot = d.sideSign * (Math.PI / 2);
+      d.mesh.rotation.y = baseRot + Math.sin(phase * 1.8) * 0.25;
+      // Vertical bob — relative to the plinth top.
+      d.mesh.position.y = plinthTop + Math.sin(phase * 4.0) * 0.04;
+      // Side sway in local X — small, slow.
+      d.mesh.position.x = Math.sin(phase * 1.25) * 0.05;
+    }
+  }
+
   private buildPlayerVisualPlaceholder(gender: string) {
     // ── Dispose any existing visual ───────────────────────────
     this.disposePlayerVisualResources();
@@ -2287,6 +2430,10 @@ export class RunnerGame {
       // scene reads as "live nightclub" while the swipe-to-start
       // overlay is up.
       this.tickDancerPodiums(this.previewClock);
+      // Same goes for the dancer sway — keeps them moving while
+      // the overlay is up. Without this they'd be frozen statues
+      // until the player swipes.
+      this.tickDancers(this.previewClock);
       this.runPlayerIdleAnimation(this.previewClock, dt);
       return;
     }
@@ -2426,6 +2573,7 @@ export class RunnerGame {
     // ── Animate club lights + dancer podium LED pulse ─────────
     this.tickClubLights(this.duration);
     this.tickDancerPodiums(this.duration);
+    this.tickDancers(this.duration);
 
     // ── Scroll pickups, check collection / pass ────────────────
     for (let i = this.pickups.length - 1; i >= 0; i--) {
