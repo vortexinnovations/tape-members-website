@@ -1,83 +1,56 @@
-// Audio manager for Tape Runner SFX. Web Audio API based, with
-// iOS-safe lifecycle (May 14, 2026).
+// Audio manager for Tape Runner SFX (May 14, 2026).
 //
-// iOS WKWebView gotchas this manager works around:
+// Tiny wrapper around HTMLAudioElement pools. Admin supplies URLs
+// via games/runner.assetUrls (sfx_jump, sfx_pickup, sfx_water,
+// sfx_combo, sfx_gameover keys); the game loads them on init and
+// fires them on the matching gameplay events.
 //
-//   1. Creating an AudioContext OUTSIDE a user gesture produces a
-//      context that can never be resumed. Solution: don't create
-//      the context until unlock() runs from inside a pointerdown
-//      handler.
+// Pooling: each key gets 4 cloned HTMLAudioElement instances. Rapid
+// re-triggers (e.g. two pickups within 100ms) round-robin through
+// the pool so a new play() doesn't cut off the previous one.
 //
-//   2. ctx.resume() only succeeds when called synchronously inside
-//      a "real" gesture event (pointerdown / pointerup / touchend
-//      / click — NOT pointermove). The swipe→audio chain in
-//      game.ts fires from pointermove, so we expose unlock() and
-//      wire it from pointerdown explicitly.
+// State:
+//   - `mutedByUser` — toggled by the HUD mute button. Persisted to
+//     localStorage so the player's preference survives across runs.
+//   - `enabledByAdmin` — from games/runner.sfxEnabled. When false,
+//     the mute button is hidden and play() is a no-op regardless of
+//     mutedByUser.
+//   - `masterVolume` — from games/runner.sfxVolume (0..1).
 //
-//   3. Even after resume(), iOS sometimes doesn't open the audio
-//      output until at least one source has played. The canonical
-//      workaround is to start a 1-sample silent source during
-//      unlock — a "wake-up call" for the audio pipeline.
-//
-//   4. <audio> elements on iOS are single-channel (a new one
-//      preempts the previously playing one). AudioBufferSourceNode
-//      is NOT — sources mix together at the destination. This is
-//      why we use Web Audio at all.
-//
-// One-shot strategy:
-//   - load(key, url) fetches the ArrayBuffer immediately (no
-//     AudioContext needed) and stashes it. Decoding is deferred
-//     until unlock() because decodeAudioData can fail silently on
-//     a never-resumed context.
-//   - On unlock() the AudioContext is created (inside the gesture),
-//     resumed, the silent-buffer trick fires, and all pending
-//     ArrayBuffers decode into AudioBuffers.
-//   - play(key) creates a fresh BufferSource + per-clip GainNode
-//     per trigger so rapid-fire pickups overlap freely.
-//
-// Loops:
-//   - Same buffer cache, `loop:<key>` namespace.
-//   - playLoop creates a source with loop = true and keeps a
-//     reference for stopLoop / live volume.
-//   - pauseLoops / resumeLoops use ctx.suspend / ctx.resume —
-//     positions are preserved across pauses.
-//
-// Mute:
-//   - masterGain.gain → 0 when muted, → _masterVolume otherwise.
-//   - One-shots in flight finish silently.
+// Autoplay: browsers block audio playback until the page receives a
+// user gesture. The runner's natural first gesture is the swipe-to-
+// start, which is enough to unlock the AudioContext for subsequent
+// SFX. If a play() fails because of autoplay restrictions, we
+// silently swallow the rejected promise (no harm done; the next
+// trigger after a user gesture will work).
 
 const LS_KEY_MUTED = 'tape_runner_audio_muted';
+const POOL_SIZE = 4;
 
 export class AudioManager {
-  private ctx: AudioContext | null = null;
-  private masterGain: GainNode | null = null;
-
-  /** Decoded AudioBuffers. One-shots use plain keys; loops use
-   *  `loop:<key>` so they share the map without colliding. */
-  private buffers = new Map<string, AudioBuffer>();
-
-  /** URL each cache slot was last loaded from. */
+  /** key (e.g. 'jump') → pool of HTMLAudioElement instances. */
+  private pools = new Map<string, HTMLAudioElement[]>();
+  /** Index into each pool, advanced round-robin on play(). */
+  private cursors = new Map<string, number>();
+  /** URL each key is loaded from, so we can skip re-loading on
+   *  init() calls that pass the same URLs. One-shots and loops
+   *  use namespaced keys ('jump' vs 'loop:running') so a key reused
+   *  between the two types doesn't collide. */
   private loadedUrls = new Map<string, string>();
 
-  /** Pre-fetched ArrayBuffers awaiting decode. iOS requires the
-   *  AudioContext to exist + be resumable (inside a user gesture)
-   *  before decodeAudioData reliably works, so we hold the raw
-   *  bytes here until unlock() opens the door. Keyed by cache key. */
-  private pendingBuffers = new Map<string, ArrayBuffer>();
-
-  /** Concurrent fetch dedupe — same URL only ever fetched once. */
-  private fetching = new Map<string, Promise<void>>();
-
-  /** Live loop nodes — start/stop semantics. */
-  private loopSources = new Map<string, AudioBufferSourceNode>();
-  private loopGains = new Map<string, GainNode>();
-
-  /** Caller intent — keeps a loop "wanting" even if the buffer
-   *  isn't decoded yet or the context is suspended. */
+  /** Loop instances — separate from `pools` because looping needs
+   *  exactly ONE dedicated `<audio>` per key. round-robin doesn't
+   *  apply (there's nothing to interrupt), and the lifecycle is
+   *  start/stop rather than one-shot fire-and-forget. */
+  private loops = new Map<string, HTMLAudioElement>();
+  /** Loops the caller has requested be playing. Survives transient
+   *  pauses (browser autoplay rejection, lifecycle pauseLoops()) so
+   *  resumeLoops() / unmute can resurrect them automatically. */
   private loopWantPlaying = new Set<string>();
 
-  /** Per-key 0..1 volume multiplier (default 1.0). Applied as the
-   *  per-clip gain on every trigger. */
+  /** Per-key 0..1 volume multiplier applied on top of `_masterVolume`.
+   *  Default for any key not present is 1.0 (no attenuation). Lets
+   *  admin balance individual SFX without touching the master. */
   private keyVolumes = new Map<string, number>();
 
   private _mutedByUser = false;
@@ -92,18 +65,24 @@ export class AudioManager {
       this._mutedByUser =
         localStorage.getItem(LS_KEY_MUTED) === 'true';
     } catch {
-      // localStorage can throw in private-mode Safari.
+      // localStorage can throw in private-mode Safari — default to
+      // unmuted and don't try to persist.
     }
   }
 
+  /** Whether the HUD mute button should be visible. False when
+   *  the admin's master switch is off. */
   get visible(): boolean {
     return this._enabledByAdmin;
   }
 
+  /** Whether sound is currently silenced (either user or admin). */
   get muted(): boolean {
     return this._mutedByUser || !this._enabledByAdmin;
   }
 
+  /** Whether the user (not admin) has the mute button engaged.
+   *  HUD button drives this — admin overrides via visible/enabled. */
   get mutedByUser(): boolean {
     return this._mutedByUser;
   }
@@ -114,9 +93,9 @@ export class AudioManager {
     try {
       localStorage.setItem(LS_KEY_MUTED, muted ? 'true' : 'false');
     } catch {
-      // ignore
+      // ignore localStorage write failures
     }
-    this._applyMute();
+    this._syncLoopsToMute();
     this.onMuteChanged?.(this.muted);
   }
 
@@ -127,341 +106,276 @@ export class AudioManager {
   setEnabledByAdmin(enabled: boolean): void {
     if (this._enabledByAdmin === enabled) return;
     this._enabledByAdmin = enabled;
-    this._applyMute();
+    this._syncLoopsToMute();
     this.onMuteChanged?.(this.muted);
   }
 
   setMasterVolume(volume: number): void {
     this._masterVolume = Math.max(0, Math.min(1, volume));
-    this._applyMute();
+    // Live loops need the new volume immediately — one-shots pick
+    // it up on their next play() call.
+    for (const [key, audio] of this.loops) {
+      try {
+        audio.volume = this._effectiveVolume(key);
+      } catch {
+        // ignore — element may be in a transitional state
+      }
+    }
   }
 
-  /** Per-key 0..1 multiplier. Updates live loops immediately. */
+  /**
+   * Per-key 0..1 multiplier. Final volume on each play / loop start
+   * is `_masterVolume * keyVolume`. Clamped to [0, 1] before storing.
+   * Updates live-playing loops immediately so admin volume slider
+   * dragging gets instant feedback.
+   */
   setKeyVolume(key: string, volume: number): void {
     if (!Number.isFinite(volume)) return;
     const clamped = Math.max(0, Math.min(1, volume));
     this.keyVolumes.set(key, clamped);
-    const gain = this.loopGains.get(key);
-    if (gain) {
+    const loop = this.loops.get(key);
+    if (loop) {
       try {
-        gain.gain.value = clamped;
+        loop.volume = this._effectiveVolume(key);
       } catch {
         // ignore
       }
     }
   }
 
-  // ── iOS unlock ──────────────────────────────────────────────
-
-  /**
-   * Public unlock hook — MUST be called from a guaranteed user-
-   * gesture event (pointerdown / touchend / click). Creates the
-   * AudioContext if needed, resumes it, plays a silent priming
-   * buffer to fully open the audio pipeline, and decodes any
-   * pre-fetched ArrayBuffers that were waiting for the context.
-   *
-   * Idempotent. After the first successful call, subsequent
-   * calls are cheap no-ops (ctx already running, no pending
-   * decodes).
-   */
-  unlock(): void {
-    const ctx = this._ensureCtx();
-    if (!ctx) return;
-    // 1) Resume if suspended. On iOS this only takes effect if
-    //    called inside a real gesture event's call stack.
-    if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
-    }
-    // 2) Silent-buffer trick. Even with resume(), iOS sometimes
-    //    won't open the output until a source has actually played.
-    //    A 1-sample silent buffer is the canonical wake-up call.
-    try {
-      const buf = ctx.createBuffer(1, 1, 22050);
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      src.connect(ctx.destination);
-      src.start(0);
-    } catch {
-      // ignore
-    }
-    // 3) Drain any pending decodes — pre-fetched bytes that we
-    //    held back until the context existed.
-    this._drainPendingDecodes();
+  /** Internal: master × per-key (default 1.0 if no per-key set). */
+  private _effectiveVolume(key: string): number {
+    const k = this.keyVolumes.get(key);
+    return this._masterVolume * (k ?? 1.0);
   }
 
-  // ── Private helpers ─────────────────────────────────────────
-
-  /** Create the AudioContext if missing. Should only be called
-   *  from unlock() (which itself runs inside a user gesture).
-   *  Creating the context OUTSIDE a gesture on iOS produces a
-   *  context that can never be resumed. */
-  private _ensureCtx(): AudioContext | null {
-    if (this.ctx) return this.ctx;
-    try {
-      const w = window as unknown as {
-        AudioContext?: typeof AudioContext;
-        webkitAudioContext?: typeof AudioContext;
-      };
-      const C = w.AudioContext || w.webkitAudioContext;
-      if (!C) return null;
-      this.ctx = new C();
-      this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.value =
-        this.muted ? 0 : this._masterVolume;
-      this.masterGain.connect(this.ctx.destination);
-    } catch {
-      return null;
-    }
-    return this.ctx;
-  }
-
-  /** Master gain reflects mute state. */
-  private _applyMute(): void {
-    const g = this.masterGain;
-    if (!g) return;
-    try {
-      g.gain.value = this.muted ? 0 : this._masterVolume;
-    } catch {
-      // ignore
-    }
-  }
-
-  /** Decode every pre-fetched ArrayBuffer and clear the queue. */
-  private _drainPendingDecodes(): void {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    for (const [cacheKey, ab] of this.pendingBuffers) {
-      // decodeAudioData CONSUMES the ArrayBuffer in the modern
-      // spec — pass a copy via slice(0) so we can keep the
-      // original around for a possible retry.
-      ctx
-        .decodeAudioData(ab.slice(0))
-        .then((buf) => {
-          this.buffers.set(cacheKey, buf);
-          // If a loop wanted to start before the buffer was ready,
-          // start it now (cacheKey is "loop:<key>" for loops).
-          if (cacheKey.startsWith('loop:')) {
-            const k = cacheKey.slice('loop:'.length);
-            if (
-              this.loopWantPlaying.has(k) &&
-              !this.loopSources.has(k) &&
-              !this.muted
-            ) {
-              this._startLoopFromBuffer(k);
-            }
-          }
-        })
-        .catch((err) => {
-          console.warn('[audio] decode failed', cacheKey, err);
-        });
-    }
-    this.pendingBuffers.clear();
-  }
-
-  /** Fetch the ArrayBuffer for a URL and stash it in
-   *  pendingBuffers OR decode immediately if the context exists. */
-  private _fetchAndQueue(cacheKey: string, url: string): void {
-    if (this.loadedUrls.get(cacheKey) === url) return;
-    this.loadedUrls.set(cacheKey, url);
-    const inflight = this.fetching.get(cacheKey);
-    if (inflight) return; // dedupe
-    const p = (async () => {
-      try {
-        const res = await fetch(url);
-        const ab = await res.arrayBuffer();
-        if (this.ctx) {
-          // Context is alive — decode straight away.
-          try {
-            const buf = await this.ctx.decodeAudioData(ab);
-            this.buffers.set(cacheKey, buf);
-            if (cacheKey.startsWith('loop:')) {
-              const k = cacheKey.slice('loop:'.length);
-              if (
-                this.loopWantPlaying.has(k) &&
-                !this.loopSources.has(k) &&
-                !this.muted
-              ) {
-                this._startLoopFromBuffer(k);
-              }
-            }
-          } catch (err) {
-            console.warn('[audio] decode failed', cacheKey, err);
-          }
-        } else {
-          // No context yet — stash for unlock() to drain.
-          this.pendingBuffers.set(cacheKey, ab);
-        }
-      } catch (err) {
-        console.warn('[audio] fetch failed', cacheKey, url, err);
-        this.loadedUrls.delete(cacheKey);
-      } finally {
-        this.fetching.delete(cacheKey);
-      }
-    })();
-    this.fetching.set(cacheKey, p);
-  }
-
-  // ── One-shot SFX ────────────────────────────────────────────
-
-  /**
-   * Preload (or replace) a one-shot SFX. Triggers a background
-   * fetch immediately; if the AudioContext doesn't exist yet (no
-   * user gesture has happened), the ArrayBuffer is stashed and
-   * decoded the moment unlock() runs.
-   */
-  load(key: string, url: string): void {
-    if (!url) {
-      this.buffers.delete(key);
-      this.loadedUrls.delete(key);
-      this.pendingBuffers.delete(key);
-      return;
-    }
-    this._fetchAndQueue(key, url);
-  }
-
-  /**
-   * Play a one-shot SFX. Spawns a new BufferSource per trigger
-   * so rapid-fire pickups overlap freely. Silent no-op if muted,
-   * no buffer decoded yet, or context never created.
-   */
-  play(key: string): void {
-    if (this.muted) return;
-    const ctx = this.ctx;
-    if (!ctx || !this.masterGain) return;
-    const buf = this.buffers.get(key);
-    if (!buf) return;
-    if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
-    }
-    try {
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      const gain = ctx.createGain();
-      gain.gain.value = this.keyVolumes.get(key) ?? 1.0;
-      src.connect(gain).connect(this.masterGain);
-      src.onended = () => {
+  /** Internal: bring loops into agreement with the current mute
+   *  state. Mute → pause every loop (intent preserved in
+   *  `loopWantPlaying`). Unmute → resume each loop the caller had
+   *  requested via playLoop(). */
+  private _syncLoopsToMute(): void {
+    if (this.muted) {
+      for (const audio of this.loops.values()) {
         try {
-          src.disconnect();
-          gain.disconnect();
+          audio.pause();
         } catch {
           // ignore
         }
-      };
-      src.start(0);
-    } catch {
-      // ignore
+      }
+      return;
+    }
+    for (const [key, audio] of this.loops) {
+      if (!this.loopWantPlaying.has(key)) continue;
+      try {
+        audio.volume = this._effectiveVolume(key);
+        audio.play().catch(() => {
+          // autoplay rejection — next user gesture will succeed
+        });
+      } catch {
+        // ignore
+      }
     }
   }
 
-  // ── Loops ───────────────────────────────────────────────────
+  /**
+   * Preload (or replace) a SFX key. If the same URL is already
+   * loaded under this key, no-op. If a different URL is loaded,
+   * the old pool is discarded (browser GC reclaims it).
+   *
+   * Empty string URL means "admin hasn't configured this SFX";
+   * we drop any existing pool so subsequent play()s are silent.
+   */
+  load(key: string, url: string): void {
+    if (!url) {
+      this.pools.delete(key);
+      this.cursors.delete(key);
+      this.loadedUrls.delete(key);
+      return;
+    }
+    if (this.loadedUrls.get(key) === url) return;
+    const pool: HTMLAudioElement[] = [];
+    for (let i = 0; i < POOL_SIZE; i++) {
+      const audio = new Audio(url);
+      audio.preload = 'auto';
+      // Don't crossfade — these are short SFX. Browser default
+      // playback already lets us simply call play() to start.
+      pool.push(audio);
+    }
+    this.pools.set(key, pool);
+    this.cursors.set(key, 0);
+    this.loadedUrls.set(key, url);
+  }
 
   /**
-   * Preload a looping SFX. Same fetch/decode dance as load() — if
-   * playLoop() fires before the buffer is ready, the decode's
-   * resolution kicks it off automatically.
+   * Play a SFX. No-op if muted, no pool loaded for the key, or the
+   * browser's autoplay policy rejects the call. Cycles through the
+   * pool so back-to-back triggers don't truncate the previous play.
+   */
+  play(key: string): void {
+    if (this.muted) return;
+    const pool = this.pools.get(key);
+    if (!pool || pool.length === 0) return;
+    const cursor = this.cursors.get(key) ?? 0;
+    const audio = pool[cursor];
+    this.cursors.set(key, (cursor + 1) % pool.length);
+    try {
+      audio.currentTime = 0;
+      audio.volume = this._effectiveVolume(key);
+      // play() returns a Promise that rejects under autoplay
+      // restrictions. We swallow — the SFX is non-critical and the
+      // next play() after a user gesture will succeed.
+      audio.play().catch(() => {
+        // ignore
+      });
+    } catch {
+      // Some browsers throw synchronously on currentTime= during
+      // a pending play — ignore.
+    }
+  }
+
+  /**
+   * Preload (or replace) a looping SFX (e.g. running footsteps).
+   * Unlike one-shots, each key gets exactly ONE `<audio>` element
+   * marked `loop = true`. Calling with an empty URL stops + drops
+   * the loop. Re-calling with the same URL is a no-op.
+   *
+   * If `playLoop(key)` was called BEFORE the URL was loaded, this
+   * starts the loop immediately on the new element (and respects
+   * current mute state).
    */
   loadLoop(key: string, url: string): void {
     const cacheKey = `loop:${key}`;
     if (!url) {
       this.stopLoop(key);
-      this.buffers.delete(cacheKey);
+      this.loops.delete(key);
       this.loadedUrls.delete(cacheKey);
-      this.pendingBuffers.delete(cacheKey);
       return;
     }
-    this._fetchAndQueue(cacheKey, url);
+    if (this.loadedUrls.get(cacheKey) === url) return;
+    const existing = this.loops.get(key);
+    if (existing) {
+      try {
+        existing.pause();
+        existing.src = '';
+      } catch {
+        // ignore
+      }
+    }
+    const audio = new Audio(url);
+    audio.preload = 'auto';
+    audio.loop = true;
+    this.loops.set(key, audio);
+    this.loadedUrls.set(cacheKey, url);
+    // If the game asked for this loop before its URL landed, kick
+    // it off now (subject to mute).
+    if (this.loopWantPlaying.has(key) && !this.muted) {
+      try {
+        audio.volume = this._effectiveVolume(key);
+        audio.play().catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
   }
 
-  /** Start (or restart) a loop. Records intent so the loop
-   *  survives mute / lifecycle pause and starts the moment its
-   *  buffer becomes ready. */
+  /**
+   * Start (or restart) a loop. Records the caller's intent so the
+   * loop survives mute / lifecycle pause and auto-resumes on
+   * unmute. No-op if no URL is loaded for the key — but the intent
+   * is still recorded, so a later `loadLoop()` will start it.
+   */
   playLoop(key: string): void {
     this.loopWantPlaying.add(key);
     if (this.muted) return;
-    if (this.loopSources.has(key)) return;
-    this._startLoopFromBuffer(key);
-  }
-
-  private _startLoopFromBuffer(key: string): void {
-    const ctx = this.ctx;
-    if (!ctx || !this.masterGain) return;
-    const buf = this.buffers.get(`loop:${key}`);
-    if (!buf) return; // not yet decoded
-    if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
-    }
+    const audio = this.loops.get(key);
+    if (!audio) return;
     try {
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      src.loop = true;
-      const gain = ctx.createGain();
-      gain.gain.value = this.keyVolumes.get(key) ?? 1.0;
-      src.connect(gain).connect(this.masterGain);
-      this.loopSources.set(key, src);
-      this.loopGains.set(key, gain);
-      src.start(0);
+      audio.volume = this._effectiveVolume(key);
+      audio.play().catch(() => {
+        // autoplay rejection — next user gesture will succeed
+      });
     } catch {
       // ignore
     }
   }
 
+  /** Stop a loop and forget the caller's intent. The audio
+   *  element stays loaded for cheap re-start later. */
   stopLoop(key: string): void {
     this.loopWantPlaying.delete(key);
-    const src = this.loopSources.get(key);
-    if (src) {
-      try {
-        src.stop(0);
-        src.disconnect();
-      } catch {
-        // ignore
-      }
-      this.loopSources.delete(key);
-    }
-    const gain = this.loopGains.get(key);
-    if (gain) {
-      try {
-        gain.disconnect();
-      } catch {
-        // ignore
-      }
-      this.loopGains.delete(key);
+    const audio = this.loops.get(key);
+    if (!audio) return;
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+    } catch {
+      // ignore
     }
   }
 
-  /** Pause everything in the graph; loop positions preserved. */
+  /**
+   * Pause every loop without clearing intent. Used by the bridge's
+   * pause() entry — the player is backgrounding the app or the
+   * Flutter wrapper is mid-transition; we want silence but want
+   * resumeLoops() to bring the same loops back.
+   */
   pauseLoops(): void {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    if (ctx.state === 'running') {
-      ctx.suspend().catch(() => {});
+    for (const audio of this.loops.values()) {
+      try {
+        audio.pause();
+      } catch {
+        // ignore
+      }
     }
   }
 
+  /**
+   * Resume any loops that had been started before pauseLoops().
+   * Skipped if currently muted (mute already enforces silence;
+   * unmuting will catch this set via _syncLoopsToMute).
+   */
   resumeLoops(): void {
     if (this.muted) return;
-    const ctx = this.ctx;
-    if (!ctx) return;
-    if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
+    for (const [key, audio] of this.loops) {
+      if (!this.loopWantPlaying.has(key)) continue;
+      try {
+        audio.volume = this._effectiveVolume(key);
+        audio.play().catch(() => {});
+      } catch {
+        // ignore
+      }
     }
   }
 
-  /** Stop all loops; one-shots clean themselves up. */
+  /** Stop all sounds (used on dispose / page hide). */
   stopAll(): void {
-    for (const key of Array.from(this.loopSources.keys())) {
-      this.stopLoop(key);
+    for (const pool of this.pools.values()) {
+      for (const audio of pool) {
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch {
+          // ignore
+        }
+      }
     }
+    for (const audio of this.loops.values()) {
+      try {
+        audio.pause();
+        audio.currentTime = 0;
+      } catch {
+        // ignore
+      }
+    }
+    this.loopWantPlaying.clear();
   }
 
   dispose(): void {
     this.stopAll();
-    this.buffers.clear();
-    this.loadedUrls.clear();
-    this.pendingBuffers.clear();
+    this.pools.clear();
+    this.cursors.clear();
+    this.loops.clear();
     this.keyVolumes.clear();
-    this.fetching.clear();
-    // Don't close the AudioContext — browsers cap how many can
-    // exist per page lifetime, and disposal is followed by route
-    // pop / page teardown anyway.
+    this.loadedUrls.clear();
   }
 }

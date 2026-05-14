@@ -2267,13 +2267,6 @@ export class RunnerGame {
 
   private attachInput() {
     this.canvas.addEventListener('pointerdown', (e) => {
-      // iOS WKWebView requires AudioContext.resume() to run inside
-      // a "real" gesture (pointerdown / touchend / click — NOT
-      // pointermove) to actually unlock playback. The swipe→audio
-      // chain ultimately fires from pointermove, which is too late
-      // by iOS's accounting, so we unlock here on every touch. The
-      // call is idempotent and cheap once the context is running.
-      this.audio.unlock();
       this.swipeStart = { x: e.clientX, y: e.clientY };
       this.swipeCommitted = false;
     });
