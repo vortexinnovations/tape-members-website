@@ -157,26 +157,22 @@ const fitScale = (meshMax[1] - meshMin[1]) / (sklMax[1] - sklMin[1]);
 const finalScale = fitScale * SIZE;
 console.log(`Fit scale: ${fitScale.toFixed(4)} × SIZE ${SIZE} = ${finalScale.toFixed(4)}`);
 
-// Bone segments after applying finalScale (just the position vectors;
-// rotations stay the same)
-const fittedBones = rawBones.map(({ name, start, end }) => ({
+// ── Skin-weight bone segments: fit-only (no SIZE) ──────────────────
+// Skin weights are computed by comparing mesh vertex positions to
+// bone segments. Both need to be in the SAME coordinate frame for the
+// distance metric to be meaningful. The mesh stays at its native
+// 1m-tall coords in the GLB (the runtime scale is applied at the
+// dancerScaleRoot level), so we scale BONES into the mesh's frame —
+// using `fitScale` only, NOT finalScale. A previous version of this
+// script scaled mesh positions by finalScale too; at SIZE > 1 that
+// caused bones to be twice as big as the mesh during weight comp,
+// which silently assigned chest vertices to head bones, waist to
+// chest bones, etc. — manifesting at runtime as an arched/bent body.
+const fittedBonesForWeights = rawBones.map(({ name, start, end }) => ({
   name,
-  start: start.map((v) => v * finalScale),
-  end: end.map((v) => v * finalScale),
+  start: start.map((v) => v * fitScale),
+  end: end.map((v) => v * fitScale),
 }));
-
-// ── Compute per-vertex skin weights ─────────────────────────────────
-// Mesh vertices are in the mesh's native frame. We need to compare
-// them against bones in a frame where bones AND mesh are in the SAME
-// coordinate space. The final GLB will have the mesh's vertex coords
-// scaled up by finalScale via the root node's transform — so for the
-// weighting math, we scale mesh positions by finalScale (matching the
-// fittedBones scale). After scaling, both bones and vertices live in
-// the same scaled world frame.
-const scaledPositions = new Float32Array(positions.length);
-for (let i = 0; i < positions.length; i++) {
-  scaledPositions[i] = positions[i] * finalScale;
-}
 
 function distToSegment(p, a, b) {
   const abx = b[0] - a[0], aby = b[1] - a[1], abz = b[2] - a[2];
@@ -195,9 +191,14 @@ const weights0 = new Float32Array(vertCount * 4);
 const EPS = 0.0005;
 const distsTmp = new Array(MAJOR_BONES.length);
 for (let v = 0; v < vertCount; v++) {
-  const p = [scaledPositions[v * 3], scaledPositions[v * 3 + 1], scaledPositions[v * 3 + 2]];
-  for (let b = 0; b < fittedBones.length; b++) {
-    distsTmp[b] = { idx: b, d: distToSegment(p, fittedBones[b].start, fittedBones[b].end) };
+  // Mesh positions in their NATIVE frame — compared against bones
+  // also in the mesh's native frame (fittedBonesForWeights).
+  const p = [positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]];
+  for (let b = 0; b < fittedBonesForWeights.length; b++) {
+    distsTmp[b] = {
+      idx: b,
+      d: distToSegment(p, fittedBonesForWeights[b].start, fittedBonesForWeights[b].end),
+    };
   }
   distsTmp.sort((x, y) => x.d - y.d);
   let sumW = 0;
