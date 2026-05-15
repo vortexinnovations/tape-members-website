@@ -424,8 +424,13 @@ export class RunnerGame {
    * AnimationMixer. Undefined while the load is in flight or if
    * the file is missing — spawnObstacle falls back to the procedural
    * capsule-stack humanoid in that case.
+   *
+   * Each spawn picks a random variant from the loaded set so the
+   * dance floor reads as a mix of distinct dancers, not 8 clones
+   * of the same one. Variants share the same spawn / collision /
+   * scale logic; they differ only in mesh + texture + animation.
    */
-  private dancerObstacleGltf?: GLTF;
+  private dancerObstacleGltfs: GLTF[] = [];
 
   /**
    * Cached GLTF for the (actual) bouncer obstacle — intimidating
@@ -1417,13 +1422,32 @@ export class RunnerGame {
    * arms) so the game keeps working without the model.
    */
   private async loadDancerObstacleModel() {
-    try {
-      this.dancerObstacleGltf =
-        await new GLTFLoader().loadAsync('/models/runner_dancer.glb');
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.debug('[runner] dancer obstacle model load failed', e);
-    }
+    // Variants — each `Promise.allSettled` slot loads independently
+    // so a missing / corrupt asset doesn't kill the whole pool;
+    // we keep whichever variants did load. spawnObstacle picks
+    // randomly across whatever ends up in the array. If all fail,
+    // the array stays empty and the spawn path falls back to the
+    // procedural capsule-stack humanoid.
+    const urls = [
+      '/models/runner_dancer.glb',
+      '/models/runner_dancer_2.glb',
+    ];
+    const loader = new GLTFLoader();
+    const settled = await Promise.allSettled(
+      urls.map((u) => loader.loadAsync(u)),
+    );
+    this.dancerObstacleGltfs = [];
+    settled.forEach((res, i) => {
+      if (res.status === 'fulfilled') {
+        this.dancerObstacleGltfs.push(res.value);
+      } else {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `[runner] dancer obstacle variant load failed (${urls[i]})`,
+          res.reason,
+        );
+      }
+    });
   }
 
   /**
@@ -5045,8 +5069,18 @@ export class RunnerGame {
       //     arms-crossed bouncer character)
       // Same collision + alignment logic; differs only by which
       // GLTF is cloned in.
-      const gltf =
-        spec.kind === 'dancer' ? this.dancerObstacleGltf : this.bouncerGltf;
+      // For 'dancer', pick a random variant from the loaded pool so
+      // the dance floor reads as a mix of distinct dancers, not 8
+      // clones of the same one. The bouncer pool is single-variant.
+      let gltf: GLTF | undefined;
+      if (spec.kind === 'dancer') {
+        const pool = this.dancerObstacleGltfs;
+        if (pool.length > 0) {
+          gltf = pool[Math.floor(Math.random() * pool.length)];
+        }
+      } else {
+        gltf = this.bouncerGltf;
+      }
       if (gltf) {
         const colliderGeo = new THREE.BoxGeometry(
           spec.width,
@@ -6231,16 +6265,9 @@ export class RunnerGame {
     // Dispose the shared dancer/bouncer obstacle GLTFs. By this
     // point all their clones have been removed from the scene, so
     // there's nothing left referencing the shared resources.
-    for (const gltfRef of [
-      { get: () => this.dancerObstacleGltf, clear: () => {
-        this.dancerObstacleGltf = undefined;
-      } },
-      { get: () => this.bouncerGltf, clear: () => {
-        this.bouncerGltf = undefined;
-      } },
-    ]) {
-      const gltf = gltfRef.get();
-      if (!gltf) continue;
+    // dancerObstacleGltfs is an array (one entry per variant); walk
+    // and dispose each. bouncerGltf is single.
+    const disposeGltfResources = (gltf: GLTF) => {
       gltf.scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh || obj instanceof THREE.SkinnedMesh) {
           obj.geometry.dispose();
@@ -6249,7 +6276,14 @@ export class RunnerGame {
           else this.disposeMaterial(m);
         }
       });
-      gltfRef.clear();
+    };
+    for (const gltf of this.dancerObstacleGltfs) {
+      disposeGltfResources(gltf);
+    }
+    this.dancerObstacleGltfs = [];
+    if (this.bouncerGltf) {
+      disposeGltfResources(this.bouncerGltf);
+      this.bouncerGltf = undefined;
     }
     this.renderer.dispose();
   }

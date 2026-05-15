@@ -11,7 +11,8 @@ runtime:
 | `runner_jump_female.glb` | Jump animation character (female) | ~880 KB |
 | `runner_fall_male.glb` | Game-over fall animation character (male) | ~3 MB |
 | `runner_fall_female.glb` | Game-over fall animation character (female) | ~925 KB |
-| `runner_dancer.glb` | Dancing-character obstacle on the dancefloor | ~2.7 MB |
+| `runner_dancer.glb` | Dancing-character obstacle (variant 1) — picked randomly per spawn | ~2.7 MB |
+| `runner_dancer_2.glb` | Dancing-character obstacle (variant 2, black-dress dancer) — picked randomly per spawn | ~2.7 MB |
 | `runner_bouncer.glb` | Arms-crossed bouncer obstacle on a staircase platform | ~1.3 MB |
 | `dancer_animated.glb` | Hip-hop podium dancer (blonde) cloned into each cage | ~1.3 MB |
 | `dancer_animated_dark.glb` | Hip-hop podium dancer (dark hair) — random alt | ~1.4 MB |
@@ -106,6 +107,14 @@ cp /tmp/final.glb /c/projects/tape_members_website/public/models/<TARGET>.glb
 
 For the dancer: `dancer_animated.glb`. For a new runner character:
 `runner_male.glb` / `runner_female.glb` etc. (overwrites are fine).
+
+**Adding a NEW dancer-obstacle variant** (e.g. a third dancer that
+mixes with the existing pool): pipeline the FBX exactly as above,
+deploy as `runner_dancer_N.glb`, and add the new path to the
+`urls` array in `loadDancerObstacleModel()` inside `game.ts`. The
+spawn path already picks at random across whatever variants
+loaded successfully — `Promise.allSettled` means a missing /
+broken variant doesn't take down the others.
 
 ### Step 5 — Adjust runtime fit constants in `game.ts`
 
