@@ -662,9 +662,14 @@ export class RunnerGame {
     const WALL_X = 10;              // ground edge
     const wallGeo = new THREE.PlaneGeometry(WALL_HALF_LENGTH * 2, WALL_HEIGHT);
     const wallMat = new THREE.MeshStandardMaterial({
-      color: 0x0c0810,
-      roughness: 0.7,
-      metalness: 0.15,
+      // Very dark with the slightest cool tint — reads as "the
+      // walls of the dark club", not "a featureless black
+      // backdrop". Near-matte roughness + 0 metalness means the
+      // coloured point-light rig is absorbed rather than reflected
+      // — no specular highlights catching on the wall faces.
+      color: 0x050308,
+      roughness: 0.95,
+      metalness: 0.0,
       side: THREE.DoubleSide,
     });
     // Left wall — at x = -10, faces +X (toward runway centre).
