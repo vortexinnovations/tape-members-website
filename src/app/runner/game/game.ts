@@ -277,10 +277,17 @@ export class RunnerGame {
    *  admin-tunable via `worldFloorTextSpacingZ`; ≤ 0 disables. */
   private floorTexts: THREE.Mesh[] = [];
   /** Pink neon "Shots Bitch" signs mounted on the side walls,
-   *  between booth backrests and portraits. Pool wraps in the
-   *  standard 90 m window. Spacing admin-tunable via
-   *  `worldWallShotsSpacingZ`; ≤ 0 disables. */
-  private wallShots: THREE.Mesh[] = [];
+   *  above the portraits. Each entry pairs the scrolling Mesh with
+   *  its own MeshBasicMaterial so we can dim individual signs by
+   *  distance (so they don't pop on at full brightness from the
+   *  spawn boundary). Texture is shared across the materials —
+   *  per-mesh material is cheap, per-mesh texture would not be.
+   *  Pool wraps in the standard 90 m window. Spacing admin-tunable
+   *  via `worldWallShotsSpacingZ`; ≤ 0 disables. */
+  private wallShots: Array<{
+    mesh: THREE.Mesh;
+    mat: THREE.MeshBasicMaterial;
+  }> = [];
   /**
    * Admin-tunable spacings for the four world-scenery pools. All
    * default to the historical hard-coded values so an unseeded
@@ -2696,26 +2703,23 @@ export class RunnerGame {
     tex.needsUpdate = true;
 
     // ── Build the pool ─────────────────────────────────────────
-    // Plane scaled 50% larger than the previous 3.75 × 0.75 m (and
-    // 125% larger than the original 2.5 × 0.5 m) — reads as a big
-    // bar-marquee neon from across the runway.
-    const PLANE_W = 5.625;
-    const PLANE_H = 1.125;
-    // y=5.5 sits in the gap between portrait tops (≈ 4.51) and the
-    // new speaker height (y=7.0). Plane half-height 0.5625 → top
-    // 6.0625, bottom 4.9375 — ~43 cm clearance below to the
-    // portraits, ~94 cm above to the speaker bottoms.
+    // Plane scaled another 25% larger than the previous 5.625 ×
+    // 1.125 m (now ~181% larger than the original 2.5 × 0.5 m) —
+    // dominates the wall band like a real bar-marquee neon.
+    const PLANE_W = 7.03125;
+    const PLANE_H = 1.40625;
+    // y=5.5 sits between portrait tops (≈ 4.51) and the speaker
+    // bottoms (y=7.0 - 0.55 = 6.45). Plane half-height ≈ 0.703 →
+    // top 6.203, bottom 4.797. ~29 cm clearance below to the
+    // portraits, ~25 cm above to the speaker bottoms.
     const SIGN_Y = 5.5;
+    // Shared geometry — same plane for every instance. Materials
+    // are PER-MESH so we can dim each sign independently by its
+    // distance from the camera (so they don't pop in at full
+    // brightness from the spawn boundary). The CanvasTexture
+    // itself is shared across every material, so only the small
+    // material struct gets duplicated.
     const planeGeo = new THREE.PlaneGeometry(PLANE_W, PLANE_H);
-    const planeMat = new THREE.MeshBasicMaterial({
-      map: tex,
-      transparent: true,
-      depthWrite: false,
-      toneMapped: false,
-      // Pink neon stays vivid regardless of distance — fog would
-      // wash it out long before the player got close.
-      fog: false,
-    });
 
     for (let side = 0; side < 2; side++) {
       const sideSign = side === 0 ? -1 : 1;
@@ -2733,11 +2737,27 @@ export class RunnerGame {
       const sideOffsetZ = side === 1 ? -SHOTS_SPACING_Z * 0.5 : 0;
       for (let i = 0; i < NUM_PER_WALL; i++) {
         const z = sideOffsetZ - i * SHOTS_SPACING_Z;
-        const mesh = new THREE.Mesh(planeGeo, planeMat);
+        const mat = new THREE.MeshBasicMaterial({
+          map: tex,
+          transparent: true,
+          depthWrite: false,
+          toneMapped: false,
+          // Pink neon stays vivid regardless of fog (which is
+          // dark-purple — would muddy the pink) — but we modulate
+          // the material's opacity per-frame based on distance so
+          // signs fade IN as they approach the camera rather than
+          // popping on at full brightness from spawn distance.
+          fog: false,
+          // Start invisible — the first scroll tick will set the
+          // real value from the distance ramp. Avoids one frame of
+          // full-brightness flash at z=-90 on game start.
+          opacity: 0,
+        });
+        const mesh = new THREE.Mesh(planeGeo, mat);
         mesh.position.set(sideX + offsetX, SIGN_Y, z);
         mesh.rotation.y = rotY;
         this.scene.add(mesh);
-        this.wallShots.push(mesh);
+        this.wallShots.push({ mesh, mat });
       }
     }
   }
@@ -3991,9 +4011,28 @@ export class RunnerGame {
       if (f.position.z > 4) f.position.z -= 90;
     }
     // ── Scroll wall "Shots Bitch" neon signs (same 90 m wavelength)
+    // PLUS distance-based opacity fade. Without this, each sign
+    // pops into view at full pink brightness from the spawn
+    // boundary (z ≈ -90) which reads as a visible spawn flash. The
+    // fade ramp goes:
+    //   z ≤ -70 → opacity 0   (fully invisible deep in the fog)
+    //   z =  -25 → opacity 1  (full brightness by mid-distance)
+    //   z ≥ -25 → opacity 1   (clamped)
+    // smoothstep gives a cubic ease so the fade-in feels natural,
+    // not a linear ramp.
+    const FADE_FAR = -70;
+    const FADE_NEAR = -25;
+    const fadeSpan = FADE_NEAR - FADE_FAR; // 45 m of fade-in range
     for (const s of this.wallShots) {
-      s.position.z += scroll;
-      if (s.position.z > 4) s.position.z -= 90;
+      s.mesh.position.z += scroll;
+      if (s.mesh.position.z > 4) s.mesh.position.z -= 90;
+      const z = s.mesh.position.z;
+      // Linear t in [0..1] across the fade-in span; clamped at both
+      // ends.
+      const linear = Math.max(0, Math.min(1, (z - FADE_FAR) / fadeSpan));
+      // smoothstep — cubic ease in/out (3t² - 2t³).
+      const smooth = linear * linear * (3 - 2 * linear);
+      s.mat.opacity = smooth;
     }
     // ── Scroll wall strobes (same 90 m wavelength) + per-frame
     // pulse: each strobe modulates its emissive panel opacity on a
