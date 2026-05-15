@@ -255,6 +255,10 @@ export class RunnerGame {
   /** Framed portrait planes mounted on the side walls. Scrolled
    *  + recycled like floorStripes so they pass past the runner. */
   private wallPortraits: THREE.Mesh[] = [];
+  /** VIP booth groups (sofa + table + bucket + bottles) along the
+   *  side walls. Scrolled in lockstep with the rest of the
+   *  side-of-runway scenery. */
+  private vipBooths: THREE.Group[] = [];
   /**
    * Velvet-rope stanchion pool. Each entry is a Group containing
    * a gold post + base + cap + a red rope tube that visually
@@ -687,6 +691,11 @@ export class RunnerGame {
     // Static + scrolls past via parallax of the floor and other
     // scenery — the player sees framed faces flashing by at speed.
     this.buildWallArt(WALL_X);
+
+    // VIP booths — sofa + gold table + glowing bucket of bottles,
+    // tucked against the wall behind the portraits. Scrolled with
+    // the rest of the scenery.
+    this.buildVIPBooths(WALL_X);
 
     // Lane separators — vertical white strips between lanes.
     const laneStripeGeo = new THREE.PlaneGeometry(0.06, 200);
@@ -1779,6 +1788,385 @@ export class RunnerGame {
         portrait.rotation.y = facingRotY;
         this.scene.add(portrait);
         this.wallPortraits.push(portrait);
+      }
+    }
+  }
+
+  /**
+   * Build VIP booth tables along both side walls — a black sofa
+   * (backrest + seat + sides), a gold cocktail table in front, and
+   * a glowing bucket of bottles centred on the table. 4 booths per
+   * wall on a 90 m wrap so they parallax past the runner.
+   *
+   * Bottle selection per bucket is deterministic-by-booth-index so
+   * the same booth shows the same bottles every wrap (no jitter).
+   * A methuselah (the giant bottle) takes the whole bucket alone;
+   * otherwise the bucket holds 2–4 smaller bottles (champagne,
+   * magnum, vodka mini, vodka bottle) in random combination.
+   */
+  private buildVIPBooths(wallX: number) {
+    // Layout constants
+    const NUM_PER_WALL = 4;
+    const BOOTH_SPACING_Z = 22.5;  // 4 × 22.5 = 90 m → perfect wrap
+    const BOOTH_OFFSET_Z = -11;    // first booth's centre Z
+
+    // Shared materials — black sofa, gold table, black bucket
+    // with green-glow accents on half the booths + white-glow
+    // accents on the other half.
+    const sofaMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a0c,
+      roughness: 0.75,
+      metalness: 0.10,
+    });
+    const tableMat = new THREE.MeshStandardMaterial({
+      color: 0x6a5018,
+      roughness: 0.25,
+      metalness: 0.85,
+      emissive: 0x281a06,
+      emissiveIntensity: 0.18,
+    });
+    const bucketMat = new THREE.MeshStandardMaterial({
+      color: 0x070608,
+      roughness: 0.55,
+      metalness: 0.30,
+    });
+    // Two glow variants — green and white. Picked alternately
+    // per booth (booth index parity).
+    const glowMatGreen = new THREE.MeshBasicMaterial({
+      color: 0x42ff80,
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const glowMatWhite = new THREE.MeshBasicMaterial({
+      color: 0xfaf5e8,
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    // Bottle materials — reused across all booths.
+    const champagneGlassMat = new THREE.MeshStandardMaterial({
+      color: 0x0a1a14,
+      roughness: 0.22,
+      metalness: 0.50,
+      emissive: 0x0e2018,
+      emissiveIntensity: 0.20,
+    });
+    const champagneFoilMat = new THREE.MeshStandardMaterial({
+      color: 0x141414,
+      roughness: 0.35,
+      metalness: 0.75,
+    });
+    const vodkaGlassMat = new THREE.MeshStandardMaterial({
+      color: 0xeaeae8,
+      roughness: 0.18,
+      metalness: 0.20,
+      transparent: true,
+      opacity: 0.65,
+    });
+    const vodkaCapMat = new THREE.MeshStandardMaterial({
+      color: 0xc8c8cc,
+      roughness: 0.35,
+      metalness: 0.80,
+    });
+
+    // ── Bottle-builder helpers ───────────────────────────────
+    // Simplified versions of the gameplay-pickup bottles — same
+    // silhouettes, fewer pieces because they're only seen
+    // briefly from across the runway in a packed booth scene.
+    const buildChampagneLike = (heightScale: number, radiusScale: number) => {
+      const g = new THREE.Group();
+      const bodyR = 0.075 * radiusScale;
+      const bodyH = 0.50 * heightScale;
+      const shoulderH = 0.10 * heightScale;
+      const neckH = 0.20 * heightScale;
+      const neckR = bodyR * 0.32;
+      const foilH = neckH * 0.55;
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(bodyR * 0.96, bodyR, bodyH, 12),
+        champagneGlassMat,
+      );
+      body.position.y = bodyH / 2;
+      g.add(body);
+      const shoulder = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckR, bodyR * 0.96, shoulderH, 10),
+        champagneGlassMat,
+      );
+      shoulder.position.y = bodyH + shoulderH / 2;
+      g.add(shoulder);
+      const neck = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckR * 0.96, neckR, neckH, 8),
+        champagneGlassMat,
+      );
+      neck.position.y = bodyH + shoulderH + neckH / 2;
+      g.add(neck);
+      const foil = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckR * 1.12, neckR * 1.08, foilH, 8),
+        champagneFoilMat,
+      );
+      foil.position.y = bodyH + shoulderH + neckH - foilH / 2;
+      g.add(foil);
+      return g;
+    };
+
+    const buildVodkaBottleLike = () => {
+      const g = new THREE.Group();
+      const bodyR = 0.07;
+      const bodyH = 0.38;
+      const shoulderH = 0.04;
+      const neckH = 0.08;
+      const neckR = bodyR * 0.40;
+      const capH = 0.04;
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(bodyR, bodyR, bodyH, 10),
+        vodkaGlassMat,
+      );
+      body.position.y = bodyH / 2;
+      g.add(body);
+      const shoulder = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckR, bodyR, shoulderH, 10),
+        vodkaGlassMat,
+      );
+      shoulder.position.y = bodyH + shoulderH / 2;
+      g.add(shoulder);
+      const neck = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckR, neckR, neckH, 8),
+        vodkaGlassMat,
+      );
+      neck.position.y = bodyH + shoulderH + neckH / 2;
+      g.add(neck);
+      const cap = new THREE.Mesh(
+        new THREE.CylinderGeometry(neckR * 1.15, neckR * 1.15, capH, 8),
+        vodkaCapMat,
+      );
+      cap.position.y = bodyH + shoulderH + neckH + capH / 2;
+      g.add(cap);
+      return g;
+    };
+
+    const buildVodkaMiniLike = () => {
+      const g = new THREE.Group();
+      const r = 0.05;
+      const h = 0.10;
+      const glass = new THREE.Mesh(
+        new THREE.CylinderGeometry(r * 1.05, r * 0.85, h, 10),
+        vodkaGlassMat,
+      );
+      glass.position.y = h / 2;
+      g.add(glass);
+      return g;
+    };
+
+    // Deterministic small PRNG (mulberry32) seeded by booth index
+    // so bottle selection is stable across re-wraps.
+    const mulberry32 = (seed: number) => {
+      let s = seed | 0;
+      return () => {
+        s = (s + 0x6D2B79F5) | 0;
+        let t = Math.imul(s ^ (s >>> 15), 1 | s);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    };
+
+    type BottleKind =
+      | 'champagne'
+      | 'magnum'
+      | 'methuselah'
+      | 'vodkaBottle'
+      | 'vodkaMini';
+    const pickBottles = (seed: number): BottleKind[] => {
+      const rng = mulberry32(seed);
+      // 15% chance the bucket holds a single methuselah (huge
+      // bottle takes the whole bucket).
+      if (rng() < 0.15) return ['methuselah'];
+      // Otherwise 2–4 smaller bottles in random combination.
+      const count = 2 + Math.floor(rng() * 3); // 2, 3, or 4
+      const pool: BottleKind[] = [
+        'champagne',
+        'champagne',
+        'magnum',
+        'vodkaBottle',
+        'vodkaBottle',
+        'vodkaMini',
+      ];
+      const out: BottleKind[] = [];
+      for (let i = 0; i < count; i++) {
+        out.push(pool[Math.floor(rng() * pool.length)]);
+      }
+      return out;
+    };
+
+    const makeBottle = (kind: BottleKind): THREE.Group => {
+      switch (kind) {
+        case 'champagne':
+          return buildChampagneLike(1.0, 1.0);
+        case 'magnum':
+          return buildChampagneLike(1.25, 1.15);
+        case 'methuselah':
+          return buildChampagneLike(1.85, 1.45);
+        case 'vodkaBottle':
+          return buildVodkaBottleLike();
+        case 'vodkaMini':
+          return buildVodkaMiniLike();
+      }
+    };
+
+    // ── Booth geometry — shared dims across all instances ───
+    const SOFA_W = 4.4;              // length along Z
+    const SOFA_BACK_H = 1.2;
+    const SOFA_BACK_DEPTH = 0.3;     // thickness perpendicular to wall
+    const SOFA_SEAT_H = 0.5;
+    const SOFA_SEAT_DEPTH = 1.0;
+    const SOFA_SIDE_DEPTH = 1.0;
+    const SOFA_SIDE_H = 0.7;
+    const SOFA_SIDE_W = 0.3;         // along Z
+    const TABLE_W = 1.2;             // along Z
+    const TABLE_DEPTH = 1.0;         // perpendicular to wall
+    const TABLE_H = 0.4;
+    const BUCKET_R = 0.22;
+    const BUCKET_H = 0.26;
+
+    // Pre-built shared geometries — one allocation, all booths
+    // share to keep draw-state simple.
+    const backrestGeo = new THREE.BoxGeometry(
+      SOFA_BACK_DEPTH,
+      SOFA_BACK_H,
+      SOFA_W,
+    );
+    const seatGeo = new THREE.BoxGeometry(SOFA_SEAT_DEPTH, SOFA_SEAT_H, SOFA_W);
+    const sideGeo = new THREE.BoxGeometry(
+      SOFA_SIDE_DEPTH,
+      SOFA_SIDE_H,
+      SOFA_SIDE_W,
+    );
+    const tableGeo = new THREE.BoxGeometry(TABLE_DEPTH, TABLE_H, TABLE_W);
+    const bucketGeo = new THREE.CylinderGeometry(
+      BUCKET_R,
+      BUCKET_R * 0.85,
+      BUCKET_H,
+      14,
+    );
+    // Glow disc — small flat plane sitting above the bucket rim
+    // (inside-the-bucket suggestion) and another under the bucket
+    // (light spill onto the table).
+    const innerGlowGeo = new THREE.CircleGeometry(BUCKET_R * 0.9, 16);
+    const underGlowGeo = new THREE.CircleGeometry(BUCKET_R * 1.4, 16);
+
+    for (let side = 0; side < 2; side++) {
+      // sideSign: -1 for left (x < 0), +1 for right
+      const sideSign = side === 0 ? -1 : 1;
+      // X position of the sofa centre (a bit inside the wall)
+      const baseX = sideSign * (wallX - 1.2);
+      // Booth components face inward toward the runway centre.
+      // sofa back hugs the wall side, table sits closer to runway.
+      // For the LEFT booth (sideSign = -1): wall is at -X, runway
+      // is at +X, so backrest at MORE NEGATIVE X (further -X),
+      // table at LESS NEGATIVE X (closer to runway). Sign math:
+      //   backrestX = baseX + sideSign * 1.0
+      //   tableX    = baseX - sideSign * 0.6
+
+      for (let i = 0; i < NUM_PER_WALL; i++) {
+        const z = BOOTH_OFFSET_Z - i * BOOTH_SPACING_Z;
+        // Booth group — single root we can scroll + wrap.
+        const booth = new THREE.Group();
+
+        // ── Sofa: backrest against wall ──────────────────────
+        const backrest = new THREE.Mesh(backrestGeo, sofaMat);
+        backrest.position.set(
+          sideSign * 1.0,
+          SOFA_BACK_H / 2,
+          0,
+        );
+        booth.add(backrest);
+        // Seat in front of backrest (closer to runway centre)
+        const seat = new THREE.Mesh(seatGeo, sofaMat);
+        seat.position.set(
+          sideSign * 0.35,
+          SOFA_SEAT_H / 2,
+          0,
+        );
+        booth.add(seat);
+        // Two side returns — short bookends at each end of the
+        // seat (Z extremes)
+        for (const sideZ of [-SOFA_W / 2 + SOFA_SIDE_W / 2,
+                              SOFA_W / 2 - SOFA_SIDE_W / 2]) {
+          const sideRet = new THREE.Mesh(sideGeo, sofaMat);
+          sideRet.position.set(
+            sideSign * 0.35,
+            SOFA_SIDE_H / 2,
+            sideZ,
+          );
+          booth.add(sideRet);
+        }
+
+        // ── Gold cocktail table ──────────────────────────────
+        const table = new THREE.Mesh(tableGeo, tableMat);
+        const tableY = TABLE_H / 2;
+        const tableX = -sideSign * 0.55; // toward runway centre
+        table.position.set(tableX, tableY, 0);
+        booth.add(table);
+
+        // ── Bucket of bottles on the table ───────────────────
+        const bucket = new THREE.Mesh(bucketGeo, bucketMat);
+        const bucketY = TABLE_H + BUCKET_H / 2;
+        bucket.position.set(tableX, bucketY, 0);
+        booth.add(bucket);
+
+        // Glow disc inside the bucket rim — facing up.
+        const isGreen = (i + side) % 2 === 0;
+        const glowMat = isGreen ? glowMatGreen : glowMatWhite;
+        const innerGlow = new THREE.Mesh(innerGlowGeo, glowMat);
+        innerGlow.position.set(tableX, TABLE_H + BUCKET_H - 0.005, 0);
+        innerGlow.rotation.x = -Math.PI / 2;
+        booth.add(innerGlow);
+        // Glow disc under the bucket on the table top — facing up.
+        const underGlow = new THREE.Mesh(underGlowGeo, glowMat);
+        underGlow.position.set(tableX, TABLE_H + 0.001, 0);
+        underGlow.rotation.x = -Math.PI / 2;
+        booth.add(underGlow);
+
+        // Bottles in the bucket. Seed by booth global index
+        // (side × NUM_PER_WALL + i) so left/right at same Z get
+        // different bottles.
+        const seed = (side * NUM_PER_WALL + i) * 7919 + 13;
+        const bottleKinds = pickBottles(seed);
+        const rngPos = mulberry32(seed + 1);
+        const bottleY = TABLE_H + BUCKET_H * 0.45;
+        if (bottleKinds.length === 1) {
+          // Single methuselah-style bottle — centered.
+          const b = makeBottle(bottleKinds[0]);
+          b.position.set(tableX, bottleY, 0);
+          booth.add(b);
+        } else {
+          // Multiple smaller bottles — arrange in a circle inside
+          // the bucket radius, slight random offset per bottle.
+          const ringR = BUCKET_R * 0.55;
+          for (let bi = 0; bi < bottleKinds.length; bi++) {
+            const ang =
+              (bi / bottleKinds.length) * Math.PI * 2 +
+              (rngPos() - 0.5) * 0.4;
+            const b = makeBottle(bottleKinds[bi]);
+            b.position.set(
+              tableX + Math.cos(ang) * ringR,
+              bottleY,
+              Math.sin(ang) * ringR,
+            );
+            // Slight random tilt so bottles look casually placed,
+            // not lined up like soldiers.
+            b.rotation.z = (rngPos() - 0.5) * 0.15;
+            b.rotation.x = (rngPos() - 0.5) * 0.10;
+            booth.add(b);
+          }
+        }
+
+        booth.position.set(baseX, 0, z);
+        this.scene.add(booth);
+        this.vipBooths.push(booth);
       }
     }
   }
@@ -3257,6 +3645,11 @@ export class RunnerGame {
     for (const p of this.wallPortraits) {
       p.position.z += scroll;
       if (p.position.z > 4) p.position.z -= 90;
+    }
+    // ── Scroll VIP booths (same 90 m wavelength)
+    for (const b of this.vipBooths) {
+      b.position.z += scroll;
+      if (b.position.z > 4) b.position.z -= 90;
     }
 
     // ── Animate club lights + dancer podium LED pulse + dance loops
