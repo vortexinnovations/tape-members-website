@@ -464,10 +464,22 @@ export class RunnerGame {
    *
    * Each spawn picks a random variant from the loaded set so the
    * dance floor reads as a mix of distinct dancers, not 8 clones
-   * of the same one. Variants share the same spawn / collision /
-   * scale logic; they differ only in mesh + texture + animation.
+   * of the same one. Variants share the same spawn / collision
+   * logic; they differ in:
+   *   - mesh + texture + animation (obviously)
+   *   - rotationY: per-variant facing direction. Different FBX
+   *     bind poses face different Z directions; instead of relying
+   *     on the spec's single `visualRotationY` default, each
+   *     variant carries its own override.
+   *   - scale: per-variant size multiplier on top of the spec's
+   *     auto-fit + visualScale. Lets one variant be visibly larger
+   *     than another without admin tuning.
    */
-  private dancerObstacleGltfs: GLTF[] = [];
+  private dancerObstacleGltfs: Array<{
+    gltf: GLTF;
+    rotationY: number;
+    scale: number;
+  }> = [];
 
   /**
    * Cached GLTF for the (actual) bouncer obstacle — intimidating
@@ -1465,22 +1477,37 @@ export class RunnerGame {
     // randomly across whatever ends up in the array. If all fail,
     // the array stays empty and the spawn path falls back to the
     // procedural capsule-stack humanoid.
-    const urls = [
-      '/models/runner_dancer.glb',
-      '/models/runner_dancer_2.glb',
+    //
+    // Per-variant tuning:
+    //   - runner_dancer.glb: original Tripo3D character. Bind pose
+    //     faces -Z; the standard π rotation flips it to face the
+    //     camera. Scale 1.0 (matches spec.height).
+    //   - runner_dancer_2.glb: black-dress female dancer. Bind
+    //     pose faces +Z (opposite direction from variant 1) so
+    //     rotation 0 keeps it facing the camera. Scale 2.0 — the
+    //     user wanted these specific dancers rendered twice as
+    //     tall as the spec.
+    const variants: Array<{ url: string; rotationY: number; scale: number }> = [
+      { url: '/models/runner_dancer.glb', rotationY: Math.PI, scale: 1.0 },
+      { url: '/models/runner_dancer_2.glb', rotationY: 0, scale: 2.0 },
     ];
     const loader = makeGltfLoader();
     const settled = await Promise.allSettled(
-      urls.map((u) => loader.loadAsync(u)),
+      variants.map((v) => loader.loadAsync(v.url)),
     );
     this.dancerObstacleGltfs = [];
     settled.forEach((res, i) => {
+      const v = variants[i];
       if (res.status === 'fulfilled') {
-        this.dancerObstacleGltfs.push(res.value);
+        this.dancerObstacleGltfs.push({
+          gltf: res.value,
+          rotationY: v.rotationY,
+          scale: v.scale,
+        });
       } else {
         // eslint-disable-next-line no-console
         console.debug(
-          `[runner] dancer obstacle variant load failed (${urls[i]})`,
+          `[runner] dancer obstacle variant load failed (${v.url})`,
           res.reason,
         );
       }
@@ -5109,11 +5136,22 @@ export class RunnerGame {
       // For 'dancer', pick a random variant from the loaded pool so
       // the dance floor reads as a mix of distinct dancers, not 8
       // clones of the same one. The bouncer pool is single-variant.
+      //
+      // Per-variant `rotationY` overrides the spec's default π so
+      // each FBX's bind pose can face the camera correctly
+      // (different variants have different bind-pose orientations).
+      // Per-variant `variantScale` multiplies the auto-fit scale —
+      // a single oversized variant doesn't need its own admin slider.
       let gltf: GLTF | undefined;
+      let variantRotationY: number | undefined;
+      let variantScale = 1.0;
       if (spec.kind === 'dancer') {
         const pool = this.dancerObstacleGltfs;
         if (pool.length > 0) {
-          gltf = pool[Math.floor(Math.random() * pool.length)];
+          const choice = pool[Math.floor(Math.random() * pool.length)];
+          gltf = choice.gltf;
+          variantRotationY = choice.rotationY;
+          variantScale = choice.scale;
         }
       } else {
         gltf = this.bouncerGltf;
@@ -5145,11 +5183,18 @@ export class RunnerGame {
         });
 
         // Face the camera (running player approaches from +Z) so
-        // the animation reads from the front. `visualRotationY`
-        // overrides per spec — Mixamo bind poses can vary, so the
-        // bouncer FBX (already facing +Z) uses 0 while the dancer
-        // FBX (facing -Z) uses the default π.
-        visual.rotation.y = spec.visualRotationY ?? Math.PI;
+        // the animation reads from the front. Three layers of
+        // override, in priority order:
+        //   1. variantRotationY — per-DANCER-VARIANT (different
+        //      Tripo3D / Mixamo source meshes can face different
+        //      directions in their bind pose; this lets variant 2
+        //      face +Z and variant 1 face -Z without conflict).
+        //   2. spec.visualRotationY — per-OBSTACLE-SPEC (e.g. the
+        //      bouncer needs 0 because its bind pose faces +Z;
+        //      variantRotationY isn't used for bouncer at all).
+        //   3. Default π — standard Mixamo "facing -Z" flip.
+        visual.rotation.y =
+            variantRotationY ?? spec.visualRotationY ?? Math.PI;
 
         // Parent into the collider first so getWorldPosition reflects
         // the full chain (collider → visual → Armature → bone).
@@ -5212,7 +5257,11 @@ export class RunnerGame {
         // collision profile — e.g. a 2× bouncer that still has a
         // jump-clearable hitbox.
         const visualExtraScale = spec.visualScale ?? 1.0;
-        visual.scale.setScalar(scaleFactor * visualExtraScale);
+        // Per-variant scale stacks on top — used to make e.g. the
+        // black-dress dancer 2× larger than the original dancer
+        // without admin tuning. Defaults to 1.0 (bouncer + variant 1).
+        visual.scale.setScalar(
+            scaleFactor * visualExtraScale * variantScale);
         visual.updateMatrixWorld(true);
 
         // Re-measure foot Y after scaling so we can drop the model
@@ -6314,8 +6363,11 @@ export class RunnerGame {
         }
       });
     };
-    for (const gltf of this.dancerObstacleGltfs) {
-      disposeGltfResources(gltf);
+    // Pool entries now carry per-variant rotation + scale metadata
+    // alongside the GLTF — dispose just the GLTF scenes; the
+    // metadata is plain JS and GCs itself.
+    for (const entry of this.dancerObstacleGltfs) {
+      disposeGltfResources(entry.gltf);
     }
     this.dancerObstacleGltfs = [];
     if (this.bouncerGltf) {
