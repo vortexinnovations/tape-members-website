@@ -11,10 +11,10 @@ runtime:
 | `runner_jump_female.glb` | Jump animation character (female) | ~880 KB |
 | `runner_fall_male.glb` | Game-over fall animation character (male) | ~3 MB |
 | `runner_fall_female.glb` | Game-over fall animation character (female) | ~925 KB |
-| `runner_bouncer.glb` | Dancing-bouncer obstacle (shared across all sessions) | ~2.7 MB |
-| `dancer_animated.glb` | Hip-hop dancing dancer cloned into each podium cage | ~1.4 MB |
-| `dancer_female.glb` | (Legacy) Static T-pose source mesh for the OLD procedural-sway dancer | ~2.9 MB |
-| `dance_anim.glb` | (Legacy) Mixamo skeleton + clip used by `tools/build_dancer_anim.mjs` | ~480 KB |
+| `runner_dancer.glb` | Dancing-character obstacle on the dancefloor | ~2.7 MB |
+| `runner_bouncer.glb` | Arms-crossed bouncer obstacle on a staircase platform | ~1.3 MB |
+| `dancer_animated.glb` | Hip-hop podium dancer (blonde) cloned into each cage | ~1.3 MB |
+| `dancer_animated_dark.glb` | Hip-hop podium dancer (dark hair) — random alt | ~1.4 MB |
 
 If a player or jump file is missing, the game silently falls back
 to the in-code capsule-stack placeholder character (player) or the
@@ -254,26 +254,10 @@ const feetOffsetY =
 Uniform parent scale is safe on Mixamo-rigged GLBs because the
 inverse bind matrices encode rest-pose transforms correctly. The
 **SIZE > 1 stretch bug we used to fight** was specific to the
-procedurally-bound `dancer_female.glb` (computed via
-`tools/bind_dancer.mjs` using bone-distance heuristics). That asset
-is retained as `dancer_female.glb` for reference but no longer
-loaded by the game.
-
----
-
-## Legacy: the procedural-bind dancer pipeline
-
-(Kept for historical context; not used by the current game.)
-
-`tools/bind_dancer.mjs` + `tools/build_dancer_anim.mjs` used to
-take a static T-pose Tripo3D mesh + a Mixamo skeleton+anim GLB
-(`dance_anim.glb`) and procedurally compute skin weights via
-bone-segment distance. Output:
-[old] `dancer_animated.glb` ~5 MB, locked to SIZE=1 due to
-SkinnedMesh + scaled-parent bindMatrix mismatch.
-
-Superseded by the FBX2glTF pipeline above — Mixamo's auto-rig
-produces clean inverse-bind matrices that scale cleanly.
+old procedurally-bound dancer (computed via
+`tools/bind_dancer.mjs` using bone-distance heuristics — both
+script and source asset have since been deleted, replaced by the
+Mixamo auto-rig path).
 
 ---
 

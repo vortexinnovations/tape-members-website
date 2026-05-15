@@ -292,28 +292,25 @@ export class RunnerGame {
     phase: number;
   }[] = [];
   /**
-   * Skinned dancer figures slotted inside each podium cage
-   * (May 14, 2026). The Tripo3D-generated GLB has no skeleton —
-   * Mixamo + AccuRIG both refuse to auto-rig AI-generated
-   * topology. We sidestep that by computing skin weights
-   * OFFLINE via bone-proximity (see `bind_dancer.mjs`), then
-   * constructing a Three.js SkinnedMesh at RUNTIME from three
-   * pieces:
+   * Skinned dancer figures slotted inside each podium cage.
    *
-   *   1. `/models/dancer_female.glb`     — static Tripo mesh
-   *   2. `/models/dance_anim.glb`        — Mixamo skeleton + clip
-   *   3. `/models/dance_skin_joints.bin` + `dance_skin_weights.bin`
-   *      + `dance_skin_meta.json`        — per-vertex bone weights
+   * The dancers are baked GLBs from Mixamo's auto-rigger:
+   *   • `/models/dancer_animated.glb`        — blonde variant
+   *   • `/models/dancer_animated_dark.glb`   — dark-haired variant
    *
-   * The bones (20 of the 53 Mixamo bones — major joints only,
-   * fingers + toes dropped) are scaled + offset to fit the
-   * mesh's 1m-tall coordinate frame. Per-vertex weights pick
-   * the 4 nearest bones via inverse-square distance. Animation
-   * mixer drives the skeleton; vertices follow via the weights.
+   * Each podium randomly picks one and SkeletonUtils.clone's
+   * an independent rig so animations run on per-podium
+   * AnimationMixers (adjacent podiums shouldn't perform the
+   * same beat in unison). See `loadDancerVisuals()` for the
+   * bbox-derived auto-fit + position logic.
    *
-   * Each podium gets its own SkinnedMesh + AnimationMixer so the
-   * dancers can be out of phase (offset clip times for variety —
-   * adjacent podiums shouldn't perform the same beat in unison).
+   * Pipeline used to produce the GLBs:
+   *   Mixamo "With Skin" FBX → FBX2glTF → gltf-transform resize
+   *   1024 → webp encode. Replaces the older procedural-bind
+   *   pipeline (bind_dancer.mjs + build_dancer_anim.mjs) which
+   *   computed skin weights from bone-vertex distance — that
+   *   approach had a SIZE > 1 bind-matrix bug, and Mixamo's
+   *   auto-rig is mathematically correct so it scales cleanly.
    */
   private dancerVisuals: {
     /** Root of the cloned rig (SkeletonUtils.clone returns Object3D). */
@@ -4884,7 +4881,8 @@ export class RunnerGame {
   /**
    * Reset all game state for a fresh run WITHOUT re-loading any
    * assets. Called from the bridge when the Flutter "Play again"
-   * button is tapped — saves the ~75 MB of FBX re-downloads
+   * button is tapped — saves the ~10–15 MB of GLB re-downloads
+   * (player + jump + fall + obstacle + podium dancer characters)
    * we'd otherwise pay for a full WebView reload.
    *
    * Reset surface:
