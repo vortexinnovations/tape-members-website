@@ -197,6 +197,20 @@ export interface ObstacleSpec {
    * search, etc.). Negative = move down, positive = move up.
    */
   visualOffsetY?: number;
+  /**
+   * When true, the obstacle collides with the player regardless of
+   * whether the player is grounded or airborne — jumping does NOT
+   * clear it. Use for "blocking" obstacles that are too tall /
+   * too solid to vault. `airOnly` is ignored when `unjumpable` is
+   * true. Defaults to false (normal jump-clearable behaviour).
+   */
+  unjumpable?: boolean;
+  /**
+   * When true, the spawn code attaches a 3-step black staircase
+   * to the collider mesh and the rigged visual stands on the top
+   * step. Use with `unjumpable` for a "podium boss" obstacle.
+   */
+  hasStaircase?: boolean;
 }
 
 export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
@@ -225,27 +239,31 @@ export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
     airOnly: false,
     failReason: 'dancerHit',
   },
-  // Actual bouncer — intimidating arms-crossed character blocking
-  // the lane. Collision profile matches the dancer (jump-clearable
-  // 1.2 × 2.05 × 0.75 box), but the VISUAL is rendered 2× the
-  // collision size so the bouncer reads as physically imposing —
-  // the player's feet pass over the same jump threshold but the
-  // bouncer towers above them. Bouncer FBX bind pose already faces
-  // +Z, so no rotation flip (visualRotationY = 0 overrides the
-  // default π that the dancer uses).
+  // Actual bouncer — intimidating arms-crossed character standing
+  // at the top of a black 3-step staircase. Cannot be jumped over
+  // (unjumpable=true). Collision footprint is widened to cover
+  // the staircase. Visual is 2× the rig scale so the bouncer
+  // looks proportional to the elevated podium. Bouncer FBX bind
+  // pose already faces +Z, so no rotation flip.
   bouncer: {
     kind: 'bouncer',
     weight: 3,
-    width: 1.2,
-    height: 2.05,
-    depth: 0.75,
+    width: 1.5,         // matches step width
+    height: 2.05,       // collision Y range — irrelevant under unjumpable
+    depth: 1.5,         // covers the 1.2 m staircase footprint + margin
     color: 0x1a0a0a,
     baseY: 1.025,
     airOnly: false,
     failReason: 'bouncerHit',
     visualRotationY: 0,
     visualScale: 2.0,
-    visualOffsetY: -1.1,
+    // Top of staircase is at world y = 0.9 (3 steps × 0.3 m). The
+    // bone-foot-detection offset that worked when the bouncer was
+    // on the floor was -1.1; add +0.9 to put feet on the top step
+    // instead of the ground.
+    visualOffsetY: -0.2,
+    unjumpable: true,
+    hasStaircase: true,
   },
   discoBall: {
     kind: 'discoBall',

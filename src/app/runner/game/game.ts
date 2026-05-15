@@ -3109,7 +3109,15 @@ export class RunnerGame {
         this.obstacles.splice(i, 1);
         continue;
       }
-      if (this.intersectsPlayer(o.mesh, 1.0, o.spec.airOnly, obsPrevZ)) {
+      if (
+        this.intersectsPlayer(
+          o.mesh,
+          1.0,
+          o.spec.airOnly,
+          obsPrevZ,
+          o.spec.unjumpable,
+        )
+      ) {
         this.endGame(o.spec.failReason);
         return;
       }
@@ -4106,8 +4114,44 @@ export class RunnerGame {
         }
         // Per-spec manual Y nudge for models whose bone-based foot
         // alignment lands them slightly wrong (e.g. the bouncer
-        // floats without a -1 m offset).
+        // floats without an offset to compensate).
         visual.position.y += spec.visualOffsetY ?? 0;
+
+        // Optional 3-step black staircase under the character —
+        // bouncer stands at the top. Attached to the collider mesh
+        // so it scrolls with the obstacle. The visual is positioned
+        // above (via visualOffsetY) so its feet land on the top step.
+        if (spec.hasStaircase) {
+          const NUM_STEPS = 3;
+          const STEP_H = 0.3;
+          const STEP_W = 1.5;
+          const STEP_D = 0.4;
+          // Black matte material with the faintest metalness so the
+          // colored point-light rig catches on the step faces —
+          // pure 0x000000 reads as a hole-in-the-scene at the dark
+          // nightclub lighting levels.
+          const stepMat = new THREE.MeshStandardMaterial({
+            color: 0x050505,
+            roughness: 0.6,
+            metalness: 0.25,
+          });
+          const stepGeo = new THREE.BoxGeometry(STEP_W, STEP_H, STEP_D);
+          // Collider local origin = collider centre at world (x,
+          // baseY, z). Steps sit on the ground (local y = -baseY)
+          // and ascend toward -Z (away from the player who
+          // approaches from +Z).
+          for (let i = 0; i < NUM_STEPS; i++) {
+            const step = new THREE.Mesh(stepGeo, stepMat);
+            // Step centre Y in collider-local space — bottom of
+            // step 0 sits on world ground (y = 0 world = -baseY
+            // local), then stack upward by STEP_H per step.
+            step.position.y = -spec.baseY + STEP_H * (i + 0.5);
+            // Step 0 (i=0) is FRONT (closest to player, +Z),
+            // step N-1 is BACK (where the bouncer stands, -Z).
+            step.position.z = (NUM_STEPS - 1) * STEP_D * 0.5 - i * STEP_D;
+            mesh.add(step);
+          }
+        }
 
         // Random start offset so every bouncer is at a different
         // point in the dance loop. Otherwise the lineup of
@@ -4355,6 +4399,7 @@ export class RunnerGame {
     paddingScale: number,
     airOnly = false,
     prevZ?: number,
+    unjumpable = false,
   ): boolean {
     const oGeo = mesh.geometry as
       | THREE.BoxGeometry
@@ -4406,7 +4451,11 @@ export class RunnerGame {
       if (mesh.position.z > playerMaxZ) return false;
     }
     const airborne = this.player.position.y > 2.0;
-    if (airOnly) {
+    if (unjumpable) {
+      // No Y gate — collide whether grounded or airborne. Used
+      // for blocking obstacles (e.g. the staircase bouncer) that
+      // are too solid / too tall to clear with a jump.
+    } else if (airOnly) {
       // Disco-ball rule: only collide when airborne (jumped into it).
       if (!airborne) return false;
     } else {
