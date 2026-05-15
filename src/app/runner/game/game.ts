@@ -1627,6 +1627,10 @@ export class RunnerGame {
     // identifiable faces. Darker skin tones across the board.
     // Each portrait now has a shirt colour so the figure isn't
     // topless.
+    // Skin tones span dark brown → near-black across the 6 variants
+    // per design request. The eye + mouth marks (#100808) become
+    // invisible on the darkest skins — that's fine, the portraits
+    // are background art seen at speed; "vague face" is the intent.
     const palettes: Array<{
       bg: string;
       skin: string;
@@ -1635,23 +1639,23 @@ export class RunnerGame {
       frame: string;
       frameInner: string;
     }> = [
-      // Warm sepia + brown hair + earth-tone shirt
-      { bg: '#1a1108', skin: '#5a3820', hair: '#0c0604',
+      // Warm sepia + black hair + earth-tone shirt — dark cocoa skin
+      { bg: '#1a1108', skin: '#3a2010', hair: '#0c0604',
         shirt: '#2a1810', frame: '#08050a', frameInner: '#3a2814' },
-      // Cool blue + black hair + navy shirt
-      { bg: '#10141c', skin: '#503020', hair: '#050204',
+      // Cool blue + black hair + navy shirt — very dark warm skin
+      { bg: '#10141c', skin: '#2a1408', hair: '#050204',
         shirt: '#10182a', frame: '#04060a', frameInner: '#1c2838' },
-      // Olive green + dark blonde + olive shirt
-      { bg: '#161810', skin: '#6a4028', hair: '#583c14',
+      // Olive green + dark blonde + olive shirt — dark brown skin
+      { bg: '#161810', skin: '#3a1c0c', hair: '#583c14',
         shirt: '#202418', frame: '#0a0c08', frameInner: '#3a3e22' },
-      // Burgundy red + dark hair + crimson shirt
-      { bg: '#1c0c10', skin: '#502c1c', hair: '#080404',
+      // Burgundy red + dark hair + crimson shirt — near-black skin
+      { bg: '#1c0c10', skin: '#1c0c04', hair: '#080404',
         shirt: '#321218', frame: '#0a0408', frameInner: '#421e28' },
-      // Slate grey + dark red hair + grey shirt
-      { bg: '#16161a', skin: '#5a3624', hair: '#3a1408',
+      // Slate grey + dark red hair + grey shirt — very dark skin
+      { bg: '#16161a', skin: '#241208', hair: '#3a1408',
         shirt: '#1c1c20', frame: '#060608', frameInner: '#2a2a32' },
-      // Deep purple + dark silver hair + plum shirt
-      { bg: '#16101c', skin: '#604030', hair: '#4a4a52',
+      // Deep purple + dark silver hair + plum shirt — dark cocoa
+      { bg: '#16101c', skin: '#321a0c', hair: '#4a4a52',
         shirt: '#24162a', frame: '#080408', frameInner: '#3a2848' },
     ];
 
@@ -1749,8 +1753,8 @@ export class RunnerGame {
       return tex;
     });
 
-    const PORTRAIT_SIZE = 1.68;      // 1.68 × 1.68 m (20% larger)
-    const PORTRAIT_Y = 3.5;           // mid-height on the wall (0.5 m lower)
+    const PORTRAIT_SIZE = 2.016;     // 2.016 × 2.016 m (44% over base — two 20% bumps)
+    const PORTRAIT_Y = 3.5;           // mid-height on the wall (0.5 m below original eye-level)
     const PORTRAIT_SPACING_Z = 9;    // one per 9 m — matches podium rhythm
     // Pool 10 portraits per wall in the −9 m to −90 m range and
     // wrap with the standard POOL_LENGTH = 90 m used by floor
@@ -1882,13 +1886,18 @@ export class RunnerGame {
       | 'vodkaBottle'
       | 'vodkaMini'
       | 'water';
+    // Bottle scales bumped another 20% over the previous round
+    // (last round was 0.55 / 0.50 / 0.85 / 0.20; now 0.66 / 0.60 /
+    // 1.02 / 0.24). Water still tracks the "80% smaller than the
+    // runway pickup" intent — 0.24 = 0.20 × 1.2 is the smallest
+    // change here, since the user's "+20%" instruction is uniform.
     const bottleScales: Record<BottleKind, number> = {
-      champagne: 0.55,
-      magnum: 0.50,
-      methuselah: 0.55, // hero single-bottle case
-      vodkaBottle: 0.55,
-      vodkaMini: 0.85,  // shot glasses are small — keep readable
-      water: 0.20,      // 80% smaller than runway, per design ask
+      champagne: 0.66,
+      magnum: 0.60,
+      methuselah: 0.66, // hero single-bottle case
+      vodkaBottle: 0.66,
+      vodkaMini: 1.02,  // shot glasses are small — keep readable
+      water: 0.24,      // small refresher prop
     };
     const pickBottles = (seed: number): BottleKind[] => {
       const rng = mulberry32(seed);
@@ -1922,21 +1931,23 @@ export class RunnerGame {
     };
 
     // ── Booth geometry — shared dims across all instances ───
-    // Tables 20% larger than the original 1.2 × 1.0 × 0.4 m design;
-    // buckets 50% larger than the original 0.22 × 0.26 m design.
-    const SOFA_W = 4.4;              // length along Z
-    const SOFA_BACK_H = 1.2;
-    const SOFA_BACK_DEPTH = 0.3;     // thickness perpendicular to wall
-    const SOFA_SEAT_H = 0.5;
-    const SOFA_SEAT_DEPTH = 1.0;
-    const SOFA_SIDE_DEPTH = 1.0;
-    const SOFA_SIDE_H = 0.7;
-    const SOFA_SIDE_W = 0.3;         // along Z
-    const TABLE_W = 1.2 * 1.2;       // along Z (1.44 m)
-    const TABLE_DEPTH = 1.0 * 1.2;   // perpendicular to wall (1.20 m)
-    const TABLE_H = 0.4 * 1.2;       // (0.48 m)
-    const BUCKET_R = 0.22 * 1.5;     // (0.33 m)
-    const BUCKET_H = 0.26 * 1.5;     // (0.39 m)
+    // Cumulative scale factors over the original design:
+    //   Sofas — 1.2× (this round, bumped from baseline 1.0)
+    //   Tables — 1.44× (1.2 × 1.2 over two rounds)
+    //   Buckets — 1.8× (1.5 × 1.2 over two rounds)
+    const SOFA_W = 4.4 * 1.2;        // along Z (5.28 m)
+    const SOFA_BACK_H = 1.2 * 1.2;   // (1.44 m)
+    const SOFA_BACK_DEPTH = 0.3 * 1.2; // perpendicular to wall (0.36 m)
+    const SOFA_SEAT_H = 0.5 * 1.2;   // (0.60 m)
+    const SOFA_SEAT_DEPTH = 1.0 * 1.2; // (1.20 m)
+    const SOFA_SIDE_DEPTH = 1.0 * 1.2; // (1.20 m)
+    const SOFA_SIDE_H = 0.7 * 1.2;   // (0.84 m)
+    const SOFA_SIDE_W = 0.3 * 1.2;   // along Z (0.36 m)
+    const TABLE_W = 1.2 * 1.44;      // along Z (1.728 m)
+    const TABLE_DEPTH = 1.0 * 1.44;  // perpendicular to wall (1.44 m)
+    const TABLE_H = 0.4 * 1.44;      // (0.576 m)
+    const BUCKET_R = 0.22 * 1.8;     // (0.396 m)
+    const BUCKET_H = 0.26 * 1.8;     // (0.468 m)
 
     // Pre-built shared geometries — one allocation, all booths
     // share to keep draw-state simple.
