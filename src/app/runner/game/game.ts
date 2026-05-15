@@ -2457,17 +2457,17 @@ export class RunnerGame {
     const POOL_LENGTH = 90;
     const NUM_PER_WALL =
         Math.max(1, Math.floor(POOL_LENGTH / SPEAKER_SPACING_Z));
-    // Speaker dimensions — raised again to make room for the
-    // enlarged neon. Wall stack reads:
+    // Speaker dimensions — raised again to make room for the much
+    // larger neon. Wall stack reads:
     //   booths → portraits → Shots Bitch → speakers → strobes
-    // SIGN_Y = 5.5 with plane height 1.125 → top edge ≈ 6.0625.
-    // Speaker centre at y = 7.0 with height 1.1 → bottom 6.45,
-    // ~39 cm gap above the neon. Top 7.55 → ~36 cm below the
-    // strobe at y = 8.0.
+    // SIGN_Y = 5.7 with plane height 2.11 → top edge ≈ 6.75.
+    // Speaker centre at y = 7.55 with height 1.1 → bottom 7.0,
+    // ~25 cm gap above the neon. Top 8.1 → ~11 cm below the
+    // strobe at y = 8.3.
     const SPEAKER_W = 1.0;
     const SPEAKER_H = 1.1;
     const SPEAKER_D = 0.25;
-    const SPEAKER_Y = 7.0;
+    const SPEAKER_Y = 7.55;
     // Cone radius — front-face grille that reads as "speaker".
     const CONE_R = SPEAKER_W * 0.32;
 
@@ -2562,11 +2562,13 @@ export class RunnerGame {
     const STROBE_W = 0.40;
     const STROBE_H = 0.18;
     const STROBE_D = 0.10;
-    // Sit ABOVE the speakers (centred at y = 7.0, top edge ≈ 7.55).
-    // y = 8.0 leaves a ~36 cm gap above the speakers and ~41 cm
-    // clearance below the LED ceiling at y = 8.5 (strobe top ≈
-    // 8.09 — well clear).
-    const STROBE_Y = 8.0;
+    // Sit ABOVE the speakers (centred at y = 7.55, top edge ≈ 8.1).
+    // y = 8.3 leaves a ~11 cm gap above the speakers. Strobe top
+    // ≈ 8.39 — would normally be tight against the LED ceiling at
+    // y = 8.5, but the ceiling plane is only 16 m wide (x = ±8) so
+    // it doesn't span out to the strobes at x = ±10. No z-fight in
+    // practice.
+    const STROBE_Y = 8.3;
 
     const cabinetMat = new THREE.MeshStandardMaterial({
       color: 0x0a0a0c,
@@ -2703,16 +2705,16 @@ export class RunnerGame {
     tex.needsUpdate = true;
 
     // ── Build the pool ─────────────────────────────────────────
-    // Plane scaled another 25% larger than the previous 5.625 ×
-    // 1.125 m (now ~181% larger than the original 2.5 × 0.5 m) —
-    // dominates the wall band like a real bar-marquee neon.
-    const PLANE_W = 7.03125;
-    const PLANE_H = 1.40625;
-    // y=5.5 sits between portrait tops (≈ 4.51) and the speaker
-    // bottoms (y=7.0 - 0.55 = 6.45). Plane half-height ≈ 0.703 →
-    // top 6.203, bottom 4.797. ~29 cm clearance below to the
-    // portraits, ~25 cm above to the speaker bottoms.
-    const SIGN_Y = 5.5;
+    // Plane scaled another 50% larger than the previous 7.03 × 1.41 m
+    // — now ~322% larger than the original 2.5 × 0.5 m build. The
+    // signs read as huge bar-marquee neons, the dominant wall element.
+    const PLANE_W = 10.546875;
+    const PLANE_H = 2.109375;
+    // y=5.7 (raised 20 cm from 5.5) so the now-bigger plane's bottom
+    // edge (≈ 4.65) clears the portrait tops (≈ 4.51) with ~14 cm
+    // gap. Plane top ≈ 6.75 — leaves ~25 cm clearance below the
+    // speaker bottoms (which raised to y=7.55, bottom 7.0).
+    const SIGN_Y = 5.7;
     // Shared geometry — same plane for every instance. Materials
     // are PER-MESH so we can dim each sign independently by its
     // distance from the camera (so they don't pop in at full
