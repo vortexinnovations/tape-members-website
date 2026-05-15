@@ -474,11 +474,17 @@ export class RunnerGame {
    *   - scale: per-variant size multiplier on top of the spec's
    *     auto-fit + visualScale. Lets one variant be visibly larger
    *     than another without admin tuning.
+   *   - offsetY: per-variant Y nudge on top of spec.visualOffsetY.
+   *     Mixamo's foot bone is often at ankle height (not the
+   *     actual foot sole), and that gap is magnified by `scale`
+   *     — a 2× character can hover by 10–20 cm. This is the
+   *     manual taste-tune to drop the floater back onto the floor.
    */
   private dancerObstacleGltfs: Array<{
     gltf: GLTF;
     rotationY: number;
     scale: number;
+    offsetY: number;
   }> = [];
 
   /**
@@ -1481,15 +1487,23 @@ export class RunnerGame {
     // Per-variant tuning:
     //   - runner_dancer.glb: original Tripo3D character. Bind pose
     //     faces -Z; the standard π rotation flips it to face the
-    //     camera. Scale 1.0 (matches spec.height).
+    //     camera. Scale 1.0 (matches spec.height). No offset
+    //     needed — foot bone lands close enough to the sole.
     //   - runner_dancer_2.glb: black-dress female dancer. Bind
     //     pose faces +Z (opposite direction from variant 1) so
     //     rotation 0 keeps it facing the camera. Scale 2.0 — the
     //     user wanted these specific dancers rendered twice as
-    //     tall as the spec.
-    const variants: Array<{ url: string; rotationY: number; scale: number }> = [
-      { url: '/models/runner_dancer.glb', rotationY: Math.PI, scale: 1.0 },
-      { url: '/models/runner_dancer_2.glb', rotationY: 0, scale: 2.0 },
+    //     tall as the spec. offsetY -1.0 because the 2× scale
+    //     magnifies the Mixamo ankle-vs-sole gap; without it she
+    //     floats ~1 m above the floor.
+    const variants: Array<{
+      url: string;
+      rotationY: number;
+      scale: number;
+      offsetY: number;
+    }> = [
+      { url: '/models/runner_dancer.glb',   rotationY: Math.PI, scale: 1.0, offsetY: 0 },
+      { url: '/models/runner_dancer_2.glb', rotationY: 0,       scale: 2.0, offsetY: -1.0 },
     ];
     const loader = makeGltfLoader();
     const settled = await Promise.allSettled(
@@ -1503,6 +1517,7 @@ export class RunnerGame {
           gltf: res.value,
           rotationY: v.rotationY,
           scale: v.scale,
+          offsetY: v.offsetY,
         });
       } else {
         // eslint-disable-next-line no-console
@@ -5145,6 +5160,7 @@ export class RunnerGame {
       let gltf: GLTF | undefined;
       let variantRotationY: number | undefined;
       let variantScale = 1.0;
+      let variantOffsetY = 0;
       if (spec.kind === 'dancer') {
         const pool = this.dancerObstacleGltfs;
         if (pool.length > 0) {
@@ -5152,6 +5168,7 @@ export class RunnerGame {
           gltf = choice.gltf;
           variantRotationY = choice.rotationY;
           variantScale = choice.scale;
+          variantOffsetY = choice.offsetY;
         }
       } else {
         gltf = this.bouncerGltf;
@@ -5304,6 +5321,10 @@ export class RunnerGame {
         // alignment lands them slightly wrong (e.g. the bouncer
         // floats without an offset to compensate).
         visual.position.y += spec.visualOffsetY ?? 0;
+        // Per-variant Y nudge stacks on top — used to drop a
+        // larger-scale variant (whose ankle-vs-sole gap is
+        // magnified) back to the floor without tweaking the spec.
+        visual.position.y += variantOffsetY;
 
         // Optional 3-step black staircase under the character —
         // bouncer stands at the top. Attached to the collider mesh
