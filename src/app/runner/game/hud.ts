@@ -422,11 +422,19 @@ export class HUD {
     // container's centre. Children own their own animation +
     // self-removal — the container exists so we have one DOM node
     // to append into, not many across the body.
+    //
+    // Anchored from the BOTTOM (above the combo timer bar which
+    // lives at safe-area + 165 px) so the flash text always lands
+    // just below the running player and just above the bar — a
+    // less distracting spot than the previous middle-of-screen
+    // position. 250 px gives ~85 px clearance over the bar, which
+    // accommodates the bonus animation's full 90 px drift without
+    // colliding with the bar at the end of the fade-out.
     this.flashContainer = document.createElement('div');
     Object.assign(this.flashContainer.style, {
       position: 'absolute',
       left: '50%',
-      top: '54%',
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 250px)',
       // The children translate themselves with their own transform,
       // so the container is a simple anchor point.
       width: '0',
