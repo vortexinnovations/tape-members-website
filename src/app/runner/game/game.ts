@@ -425,16 +425,22 @@ export class RunnerGame {
   private obstacleIntervalMinSeconds = SPAWN.OBSTACLE_INTERVAL_MIN_S;
   // Combo window — seconds since the last pickup to keep the chain.
   private comboWindowSeconds: number = COMBO.WINDOW_S;
-  // Combo multiplier tiers — three thresholds + multipliers above
-  // the baseline (which is always 0/1.0). Defaults mirror the
-  // historical hardcoded MULTIPLIERS table in tuning.ts: 5/×1.5,
-  // 10/×2.0, 20/×3.0. Each is admin-overridable via init().
-  private comboTier2Threshold = 5;
-  private comboTier2Multiplier = 1.5;
-  private comboTier3Threshold = 10;
-  private comboTier3Multiplier = 2.0;
-  private comboTier4Threshold = 20;
-  private comboTier4Multiplier = 3.0;
+  /**
+   * Combo multiplier tiers above the always-baseline ×1.0.
+   * Sorted ascending by threshold. Defaults mirror the historical
+   * three-tier behaviour (5/×1.5, 10/×2.0, 20/×3.0) so an unseeded
+   * Firestore doc plays the same as the original hardcoded table.
+   *
+   * Admin can override with any number of tiers via `comboTiers`
+   * in settings. Legacy `comboTier2Threshold` / `…Multiplier` keys
+   * are still read as a fallback for docs that haven't been
+   * migrated yet.
+   */
+  private comboTiers: Array<{ threshold: number; multiplier: number }> = [
+    { threshold: 5, multiplier: 1.5 },
+    { threshold: 10, multiplier: 2.0 },
+    { threshold: 20, multiplier: 3.0 },
+  ];
   // Player feel — jump impulse + base lane-change time (buzz still
   // scales the lane time at higher levels).
   private jumpVelocity = PLAYER.JUMP_VY;
@@ -3966,16 +3972,19 @@ export class RunnerGame {
 
   /**
    * Combo multiplier for the given combo count, honouring the
-   * three admin-tunable tier thresholds + multipliers. Picks the
-   * highest tier whose threshold the combo satisfies; falls back
-   * to 1.0 below tier 2. Replaces the static `comboMultiplier`
+   * admin-tunable `comboTiers` array. Picks the highest tier
+   * whose threshold the combo satisfies; falls back to 1.0 below
+   * the smallest threshold. Replaces the static `comboMultiplier`
    * function in tuning.ts (which is no longer wired into the
    * runtime — kept around as the default baseline).
    */
   private getComboMultiplier(combo: number): number {
-    if (combo >= this.comboTier4Threshold) return this.comboTier4Multiplier;
-    if (combo >= this.comboTier3Threshold) return this.comboTier3Multiplier;
-    if (combo >= this.comboTier2Threshold) return this.comboTier2Multiplier;
+    // Walk in reverse — tiers are sorted ascending, so the first
+    // hit from the back is the highest applicable multiplier.
+    for (let i = this.comboTiers.length - 1; i >= 0; i--) {
+      const t = this.comboTiers[i];
+      if (combo >= t.threshold) return t.multiplier;
+    }
     return 1.0;
   }
 
@@ -5214,39 +5223,62 @@ export class RunnerGame {
       if (typeof s.sfxRunningUrl === 'string') this.audio.loadLoop('running', s.sfxRunningUrl);
 
       // ── Combo tier overrides ───────────────────────────────
-      // Three tiers above the baseline (which is always 0/×1.0).
-      // Each is independently optional in Firestore; missing
-      // values fall back to the instance defaults (5/×1.5,
-      // 10/×2.0, 20/×3.0). Threshold gate is `>= 1` — combo starts
-      // at 0 and increments to 1 on the first scoring pickup, so
-      // 1 means "fires on the first bottle". 0 would mean "always
-      // fires" which is degenerate; we reject that.
-      if (
-        typeof s.comboTier2Threshold === 'number' &&
-        s.comboTier2Threshold >= 1
-      ) {
-        this.comboTier2Threshold = Math.floor(s.comboTier2Threshold);
-      }
-      if (typeof s.comboTier2Multiplier === 'number' && s.comboTier2Multiplier > 0) {
-        this.comboTier2Multiplier = s.comboTier2Multiplier;
-      }
-      if (
-        typeof s.comboTier3Threshold === 'number' &&
-        s.comboTier3Threshold >= 1
-      ) {
-        this.comboTier3Threshold = Math.floor(s.comboTier3Threshold);
-      }
-      if (typeof s.comboTier3Multiplier === 'number' && s.comboTier3Multiplier > 0) {
-        this.comboTier3Multiplier = s.comboTier3Multiplier;
-      }
-      if (
-        typeof s.comboTier4Threshold === 'number' &&
-        s.comboTier4Threshold >= 1
-      ) {
-        this.comboTier4Threshold = Math.floor(s.comboTier4Threshold);
-      }
-      if (typeof s.comboTier4Multiplier === 'number' && s.comboTier4Multiplier > 0) {
-        this.comboTier4Multiplier = s.comboTier4Multiplier;
+      // Preferred path: `comboTiers` array (admin-tunable length).
+      // Each entry must have a positive integer threshold (≥ 1) and
+      // a positive multiplier. Invalid entries are silently dropped
+      // — the goal is robustness against half-edited docs, not
+      // strictness.
+      //
+      // Threshold gate is ≥ 1 because combo starts at 0 and ticks
+      // to 1 on the first scoring pickup, so 1 means "fires on the
+      // first bottle". 0 would mean "always fires" which is
+      // degenerate.
+      if (Array.isArray(s.comboTiers) && s.comboTiers.length > 0) {
+        const next: Array<{ threshold: number; multiplier: number }> = [];
+        for (const raw of s.comboTiers) {
+          if (
+            raw &&
+            typeof raw === 'object' &&
+            typeof raw.threshold === 'number' &&
+            raw.threshold >= 1 &&
+            typeof raw.multiplier === 'number' &&
+            raw.multiplier > 0
+          ) {
+            next.push({
+              threshold: Math.floor(raw.threshold),
+              multiplier: raw.multiplier,
+            });
+          }
+        }
+        if (next.length > 0) {
+          // Sort ascending so getComboMultiplier()'s reverse walk
+          // returns the right tier.
+          next.sort((a, b) => a.threshold - b.threshold);
+          this.comboTiers = next;
+        }
+      } else {
+        // Legacy fallback — read the three fixed-tier fields if
+        // the array form isn't present. Preserves behaviour for
+        // unmigrated Firestore docs. Once admins re-save through
+        // the new UI, this branch is skipped.
+        const legacy: Array<{ threshold: number; multiplier: number }> = [];
+        const pushLegacy = (t: unknown, m: unknown) => {
+          if (
+            typeof t === 'number' &&
+            t >= 1 &&
+            typeof m === 'number' &&
+            m > 0
+          ) {
+            legacy.push({ threshold: Math.floor(t), multiplier: m });
+          }
+        };
+        pushLegacy(s.comboTier2Threshold, s.comboTier2Multiplier);
+        pushLegacy(s.comboTier3Threshold, s.comboTier3Multiplier);
+        pushLegacy(s.comboTier4Threshold, s.comboTier4Multiplier);
+        if (legacy.length > 0) {
+          legacy.sort((a, b) => a.threshold - b.threshold);
+          this.comboTiers = legacy;
+        }
       }
 
       // ── Spawn pacing ────────────────────────────────────────

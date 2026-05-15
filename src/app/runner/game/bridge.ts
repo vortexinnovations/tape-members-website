@@ -81,14 +81,33 @@ export type InitPayload = {
     obstacleIntervalMinSeconds?: number;
     // ── Combo (Three.js only) ───────────────────────────────────
     comboWindowSeconds?: number;
-    // Three tiers above the always-baseline (combo 0..tier2-1 = ×1.0).
-    // Each tier independently optional. Defaults: 5/×1.5, 10/×2.0,
-    // 20/×3.0. Thresholds must be ≥ 2; multipliers must be > 0.
+    /**
+     * Combo multiplier tiers above the always-baseline ×1.0.
+     * Each entry is `{ threshold, multiplier }`. The runner sorts
+     * ascending by threshold and picks the highest tier the player's
+     * combo count satisfies. Arbitrary length — admins can add as
+     * many tiers as they want for deep chains.
+     *
+     * Defaults if omitted: 5/×1.5, 10/×2.0, 20/×3.0 (mirrors the
+     * legacy fixed three-tier behaviour).
+     */
+    comboTiers?: Array<{ threshold: number; multiplier: number }>;
+    /**
+     * @deprecated — superseded by `comboTiers`. Honoured only when
+     * `comboTiers` is absent, for backwards-compat with Firestore
+     * docs that haven't been migrated. New writes should use the
+     * array form.
+     */
     comboTier2Threshold?: number;
+    /** @deprecated — see `comboTiers`. */
     comboTier2Multiplier?: number;
+    /** @deprecated — see `comboTiers`. */
     comboTier3Threshold?: number;
+    /** @deprecated — see `comboTiers`. */
     comboTier3Multiplier?: number;
+    /** @deprecated — see `comboTiers`. */
     comboTier4Threshold?: number;
+    /** @deprecated — see `comboTiers`. */
     comboTier4Multiplier?: number;
     // ── Player feel (Three.js only) ─────────────────────────────
     jumpVelocity?: number;
