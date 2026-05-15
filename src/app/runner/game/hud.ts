@@ -230,33 +230,46 @@ export class HUD {
     // rather than the top row.
     this.root.appendChild(this.buzzWrap);
 
-    // Score column (centre)
+    // Score column (centre) — wrapped in a soft dark halo so the
+    // numbers stay readable against busy 3D content (ceiling lights,
+    // bright walls, neon signs etc). The radial-gradient backdrop
+    // fades fully to transparent at the edges so it doesn't feel
+    // like a hard pill — just a darkened spot behind the text.
     const scoreCol = document.createElement('div');
     Object.assign(scoreCol.style, {
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      gap: '2px',
-    });
+      gap: '4px',
+      padding: '14px 32px',
+      background:
+        'radial-gradient(ellipse at center, rgba(0,0,0,0.60) 0%, rgba(0,0,0,0.38) 50%, rgba(0,0,0,0) 85%)',
+    } satisfies Partial<CSSStyleDeclaration>);
     this.scoreEl = document.createElement('div');
     Object.assign(this.scoreEl.style, {
-      fontSize: '32px',
+      fontSize: '38px',
       fontWeight: '800',
       letterSpacing: '0.5px',
       fontVariantNumeric: 'tabular-nums',
       lineHeight: '1',
-      textShadow: '0 2px 8px rgba(0, 0, 0, 0.6)',
+      // Slightly stronger shadow to give the score weight without
+      // outlining it — pairs with the radial backdrop for clarity.
+      textShadow: '0 2px 10px rgba(0, 0, 0, 0.75)',
     } satisfies Partial<CSSStyleDeclaration>);
     this.scoreEl.textContent = '0';
     scoreCol.appendChild(this.scoreEl);
     this.distEl = document.createElement('div');
     Object.assign(this.distEl.style, {
-      fontSize: '11px',
-      fontWeight: '600',
+      fontSize: '13px',
+      fontWeight: '700',
       letterSpacing: '1.5px',
       textTransform: 'uppercase',
-      opacity: '0.55',
+      // Lifted from 0.55 → 0.88: the M / M/S units used to read as
+      // mid-grey, now sit much closer to white while still feeling
+      // secondary to the headline score above.
+      opacity: '0.88',
       fontVariantNumeric: 'tabular-nums',
+      textShadow: '0 1px 4px rgba(0, 0, 0, 0.7)',
     } satisfies Partial<CSSStyleDeclaration>);
     this.distEl.textContent = '0m · 0 m/s';
     scoreCol.appendChild(this.distEl);
