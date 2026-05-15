@@ -2450,16 +2450,17 @@ export class RunnerGame {
     const POOL_LENGTH = 90;
     const NUM_PER_WALL =
         Math.max(1, Math.floor(POOL_LENGTH / SPEAKER_SPACING_Z));
-    // Speaker dimensions — raised so the wall stack reads:
-    //   booths → portraits → Shots Bitch neon → speakers → strobes
-    // SIGN_Y = 5.0 with plane height 0.75 → top edge ≈ 5.375.
-    // Speaker centre at y = 6.2 with height 1.1 → bottom 5.65,
-    // leaves ~28 cm gap above the neon. Top 6.75 → ~45 cm below
-    // the strobe at y = 7.2.
+    // Speaker dimensions — raised again to make room for the
+    // enlarged neon. Wall stack reads:
+    //   booths → portraits → Shots Bitch → speakers → strobes
+    // SIGN_Y = 5.5 with plane height 1.125 → top edge ≈ 6.0625.
+    // Speaker centre at y = 7.0 with height 1.1 → bottom 6.45,
+    // ~39 cm gap above the neon. Top 7.55 → ~36 cm below the
+    // strobe at y = 8.0.
     const SPEAKER_W = 1.0;
     const SPEAKER_H = 1.1;
     const SPEAKER_D = 0.25;
-    const SPEAKER_Y = 6.2;
+    const SPEAKER_Y = 7.0;
     // Cone radius — front-face grille that reads as "speaker".
     const CONE_R = SPEAKER_W * 0.32;
 
@@ -2554,10 +2555,11 @@ export class RunnerGame {
     const STROBE_W = 0.40;
     const STROBE_H = 0.18;
     const STROBE_D = 0.10;
-    // Sit ABOVE the speakers (centred at y = 6.2, top edge ≈ 6.75).
-    // y = 7.2 leaves a ~36 cm gap and ~1.2 m clearance below the
-    // LED ceiling at y = 8.5.
-    const STROBE_Y = 7.2;
+    // Sit ABOVE the speakers (centred at y = 7.0, top edge ≈ 7.55).
+    // y = 8.0 leaves a ~36 cm gap above the speakers and ~41 cm
+    // clearance below the LED ceiling at y = 8.5 (strobe top ≈
+    // 8.09 — well clear).
+    const STROBE_Y = 8.0;
 
     const cabinetMat = new THREE.MeshStandardMaterial({
       color: 0x0a0a0c,
@@ -2611,10 +2613,11 @@ export class RunnerGame {
 
   /**
    * Pink-neon "Shots Bitch" cursive signs mounted on the side walls.
-   * Sits ABOVE the portraits (portraits top ≈ y=4.5) and below the
-   * speakers (raised to y=6.2 to make room) — the band a neon
-   * marquee would naturally hang at in a real club, high enough to
-   * read from across the room but below ceiling-mounted lighting.
+   * Sits ABOVE the portraits (portraits top ≈ y=4.51) and below the
+   * speakers (raised to y=7.0 to make room for the enlarged neon) —
+   * the band a bar marquee would naturally hang at in a real club,
+   * high enough to read from across the room but below the
+   * ceiling-mounted lighting rig.
    *
    * The text is rendered onto a shared CanvasTexture (one texture,
    * applied to N planes) with a 3-pass neon glow: outer magenta
@@ -2693,15 +2696,16 @@ export class RunnerGame {
     tex.needsUpdate = true;
 
     // ── Build the pool ─────────────────────────────────────────
-    // Plane scaled 50% larger than the original 2.5 × 0.5 m → so
-    // the neon reads at a comfortable size now that it's mounted
-    // higher up the wall (further from the camera's mid-line).
-    const PLANE_W = 3.75;
-    const PLANE_H = 0.75;
-    // y=5.0 sits in the gap between portrait tops (≈ 4.51) and the
-    // new speaker height (y=6.2). Plane half-height 0.375 → top
-    // 5.375, bottom 4.625 — clean ~12 cm clearance both ways.
-    const SIGN_Y = 5.0;
+    // Plane scaled 50% larger than the previous 3.75 × 0.75 m (and
+    // 125% larger than the original 2.5 × 0.5 m) — reads as a big
+    // bar-marquee neon from across the runway.
+    const PLANE_W = 5.625;
+    const PLANE_H = 1.125;
+    // y=5.5 sits in the gap between portrait tops (≈ 4.51) and the
+    // new speaker height (y=7.0). Plane half-height 0.5625 → top
+    // 6.0625, bottom 4.9375 — ~43 cm clearance below to the
+    // portraits, ~94 cm above to the speaker bottoms.
+    const SIGN_Y = 5.5;
     const planeGeo = new THREE.PlaneGeometry(PLANE_W, PLANE_H);
     const planeMat = new THREE.MeshBasicMaterial({
       map: tex,
