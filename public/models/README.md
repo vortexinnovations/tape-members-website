@@ -5,11 +5,11 @@ runtime:
 
 | File | Purpose | Size |
 |---|---|---|
-| `runner_male.glb` | Player when `playerGender: 'male'` (default) | ~3 MB |
+| `runner_male.glb` | Player when `playerGender: 'male'` (default) — Draco-compressed | ~1.2 MB |
 | `runner_female.glb` | Player when `playerGender: 'female'` | ~870 KB |
-| `runner_jump_male.glb` | Jump animation character (male) | ~3 MB |
+| `runner_jump_male.glb` | Jump animation character (male) — Draco-compressed | ~1.2 MB |
 | `runner_jump_female.glb` | Jump animation character (female) | ~880 KB |
-| `runner_fall_male.glb` | Game-over fall animation character (male) | ~3 MB |
+| `runner_fall_male.glb` | Game-over fall animation character (male) — Draco-compressed | ~1.2 MB |
 | `runner_fall_female.glb` | Game-over fall animation character (female) | ~925 KB |
 | `runner_dancer.glb` | Dancing-character obstacle (variant 1) — picked randomly per spawn | ~2.7 MB |
 | `runner_dancer_2.glb` | Dancing-character obstacle (variant 2, black-dress dancer) — picked randomly per spawn | ~2.7 MB |
@@ -83,7 +83,32 @@ Expected size trajectory for a typical Mixamo dancer FBX:
 
 **Do NOT use** `gltf-transform optimize`, `flatten`, `join`, or
 `simplify` on a skinned mesh — those operations break SkinnedMesh
-bind poses. Resize + webp are the only safe ops on rigged assets.
+bind poses. Resize + webp + draco + meshopt + resample are the
+safe ops on rigged assets.
+
+### Optional step D — Draco geometry compression (~60% reduction)
+
+For meshes >2 MB, append a Draco pass. It re-encodes geometry
+(positions/normals/UVs/joints/weights) into a quantised binary
+form — fully lossless for the bind pose and skin weights, animations
+untouched.
+
+```bash
+npx --yes @gltf-transform/cli@latest draco \
+  /tmp/final.glb /tmp/final-draco.glb
+```
+
+Confirms the asset's `extensionsRequired` array gains
+`KHR_draco_mesh_compression`. The runtime path
+(`makeGltfLoader()` in `game.ts`) is already wired with a
+DRACOLoader pointing at `https://www.gstatic.com/draco/v1/decoders/`,
+so Draco GLBs and plain GLBs both load through the same loader.
+First Draco load fetches the ~200 KB WASM decoder once,
+cached aggressively by gstatic.
+
+Mixamo "Suit Guy" trilogy (~9.3 MB) → ~3.6 MB after Draco.
+Animations identical (channels/samplers/keyframes byte-for-byte
+match).
 
 ### Step 3 — Verify the GLB
 

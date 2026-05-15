@@ -24,7 +24,44 @@ import {
   GLTFLoader,
   type GLTF,
 } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+
+/**
+ * Singleton DRACOLoader configured to fetch the WASM decoder from
+ * Google's gstatic CDN. Created lazily on first use so a game
+ * session that loads only uncompressed GLBs doesn't pay the
+ * decoder-fetch cost.
+ *
+ * Why a singleton: every GLTFLoader instance can share one
+ * DRACOLoader. Three.js's docs recommend exactly this — creating
+ * one DRACOLoader per GLTFLoader would download the WASM N times.
+ */
+let dracoLoaderSingleton: DRACOLoader | null = null;
+function getDracoLoader(): DRACOLoader {
+  if (dracoLoaderSingleton) return dracoLoaderSingleton;
+  const loader = new DRACOLoader();
+  // gstatic decoder mirrors Three.js's own example — versioned,
+  // cached aggressively across the web. Falls back to JS decoder if
+  // WASM isn't available; both work on iOS WKWebView.
+  loader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+  dracoLoaderSingleton = loader;
+  return loader;
+}
+
+/**
+ * Factory for a GLTFLoader pre-wired with the DRACOLoader. The
+ * loader auto-detects whether a given GLB uses the
+ * `KHR_draco_mesh_compression` extension; uncompressed GLBs go
+ * through the same loader unchanged. Safe to use everywhere —
+ * adds zero overhead for non-Draco files (the WASM decoder
+ * doesn't even fetch until a Draco GLB asks for it).
+ */
+function makeGltfLoader(): GLTFLoader {
+  const loader = new GLTFLoader();
+  loader.setDRACOLoader(getDracoLoader());
+  return loader;
+}
 
 import {
   postToFlutter,
@@ -899,7 +936,7 @@ export class RunnerGame {
     // know to bail when this one finishes.
     this.loadedJumpGender = suffix;
     try {
-      const gltf = await new GLTFLoader().loadAsync(
+      const gltf = await makeGltfLoader().loadAsync(
         `/models/runner_jump_${suffix}.glb`,
       );
       // If gender flipped while we were loading, drop this one on
@@ -1154,7 +1191,7 @@ export class RunnerGame {
     // know to bail when this one finishes.
     this.loadedFallGender = suffix;
     try {
-      const gltf = await new GLTFLoader().loadAsync(
+      const gltf = await makeGltfLoader().loadAsync(
         `/models/runner_fall_${suffix}.glb`,
       );
       // If gender flipped while we were loading, drop this one on
@@ -1432,7 +1469,7 @@ export class RunnerGame {
       '/models/runner_dancer.glb',
       '/models/runner_dancer_2.glb',
     ];
-    const loader = new GLTFLoader();
+    const loader = makeGltfLoader();
     const settled = await Promise.allSettled(
       urls.map((u) => loader.loadAsync(u)),
     );
@@ -1459,7 +1496,7 @@ export class RunnerGame {
   private async loadBouncerModel() {
     try {
       this.bouncerGltf =
-        await new GLTFLoader().loadAsync('/models/runner_bouncer.glb');
+        await makeGltfLoader().loadAsync('/models/runner_bouncer.glb');
     } catch (e) {
       // eslint-disable-next-line no-console
       console.debug('[runner] bouncer model load failed', e);
@@ -3050,7 +3087,7 @@ export class RunnerGame {
       // the row reads as a mix of personalities, not 10 clones.
       // Loaded in parallel; if either 404s, the variant just
       // isn't used (the array filter below handles missing).
-      const loader = new GLTFLoader();
+      const loader = makeGltfLoader();
       const [blondeGltf, darkGltf] = await Promise.all([
         loader.loadAsync('/models/dancer_animated.glb').catch(() => null),
         loader.loadAsync('/models/dancer_animated_dark.glb').catch(() => null),
@@ -3504,7 +3541,7 @@ export class RunnerGame {
     let scene: THREE.Group | undefined;
     let animations: THREE.AnimationClip[] = [];
     try {
-      const gltf: GLTF = await new GLTFLoader().loadAsync(
+      const gltf: GLTF = await makeGltfLoader().loadAsync(
         `/models/runner_${suffix}.glb`,
       );
       scene = gltf.scene;
