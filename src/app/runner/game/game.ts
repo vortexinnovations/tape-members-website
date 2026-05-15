@@ -647,6 +647,37 @@ export class RunnerGame {
     ground.position.z = -90;
     this.scene.add(ground);
 
+    // ── Side walls ──────────────────────────────────────────────
+    // Tall dark walls flanking the runway at the edges of the
+    // ground (x = ±10). Length matches the ground, height runs
+    // above the LED ceiling (y = 8.5) up to 10 m so a glance up
+    // never sees a gap between wall-top and ceiling. Slightly
+    // less metallic than the ground so the coloured rig's
+    // sidelight catches as a soft sheen rather than a hard
+    // specular highlight. PlaneGeometry rotated to face inward
+    // toward the runway; DoubleSide so the inside of the club
+    // reads correctly from any camera angle.
+    const WALL_HALF_LENGTH = 100;   // 200 m total length, matches ground
+    const WALL_HEIGHT = 10;
+    const WALL_X = 10;              // ground edge
+    const wallGeo = new THREE.PlaneGeometry(WALL_HALF_LENGTH * 2, WALL_HEIGHT);
+    const wallMat = new THREE.MeshStandardMaterial({
+      color: 0x0c0810,
+      roughness: 0.7,
+      metalness: 0.15,
+      side: THREE.DoubleSide,
+    });
+    // Left wall — at x = -10, faces +X (toward runway centre).
+    const leftWall = new THREE.Mesh(wallGeo, wallMat);
+    leftWall.position.set(-WALL_X, WALL_HEIGHT / 2, -90);
+    leftWall.rotation.y = Math.PI / 2;
+    this.scene.add(leftWall);
+    // Right wall — at x = +10, faces -X.
+    const rightWall = new THREE.Mesh(wallGeo, wallMat);
+    rightWall.position.set(WALL_X, WALL_HEIGHT / 2, -90);
+    rightWall.rotation.y = -Math.PI / 2;
+    this.scene.add(rightWall);
+
     // Lane separators — vertical white strips between lanes.
     const laneStripeGeo = new THREE.PlaneGeometry(0.06, 200);
     const laneStripeMat = new THREE.MeshBasicMaterial({
