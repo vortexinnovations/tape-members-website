@@ -1581,16 +1581,35 @@ export class RunnerGame {
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `260px "${FONT_FAMILY}", sans-serif`;
+
+    // Adaptive font sizing — start at 260 px and shrink in 8 px
+    // steps until the rendered text fits inside the canvas with a
+    // safe margin. Necessary because the Embossing Tape glyphs are
+    // much wider than a typical sans-serif at the same point size;
+    // a fixed 260 px clips "ALL ROADS LEAD TO TAPE" at both ends
+    // (the user's screenshot showed exactly that). Looping with
+    // measureText is robust to future font swaps + browser metric
+    // variation.
+    const TEXT = 'ALL ROADS LEAD TO TAPE';
+    const SIDE_MARGIN = 60;
+    const MAX_TEXT_W = PIXEL_W - 2 * SIDE_MARGIN;
+    let fontSize = 260;
+    ctx.font = `${fontSize}px "${FONT_FAMILY}", sans-serif`;
+    let measured = ctx.measureText(TEXT).width;
+    while (measured > MAX_TEXT_W && fontSize > 60) {
+      fontSize -= 8;
+      ctx.font = `${fontSize}px "${FONT_FAMILY}", sans-serif`;
+      measured = ctx.measureText(TEXT).width;
+    }
     // Pass 1: warm red glow halo.
     ctx.shadowColor = '#ff3050';
     ctx.shadowBlur = 48;
     ctx.fillStyle = '#ff5566';
-    ctx.fillText('ALL ROADS LEAD TO TAPE', PIXEL_W / 2, PIXEL_H / 2);
+    ctx.fillText(TEXT, PIXEL_W / 2, PIXEL_H / 2);
     // Pass 2: cream-pink core — bright fill on top of the glow.
     ctx.shadowBlur = 18;
     ctx.fillStyle = '#ffe0e2';
-    ctx.fillText('ALL ROADS LEAD TO TAPE', PIXEL_W / 2, PIXEL_H / 2);
+    ctx.fillText(TEXT, PIXEL_W / 2, PIXEL_H / 2);
 
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
