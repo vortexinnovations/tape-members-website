@@ -198,6 +198,13 @@ export interface ObstacleSpec {
    */
   visualOffsetY?: number;
   /**
+   * Manual Z-offset applied to the visual. Defaults to 0. Use
+   * to push a character forward / backward inside the collider
+   * footprint — e.g. the bouncer stands at the back of his
+   * staircase platform.
+   */
+  visualOffsetZ?: number;
+  /**
    * When true, the obstacle collides with the player regardless of
    * whether the player is grounded or airborne — jumping does NOT
    * clear it. Use for "blocking" obstacles that are too tall /
@@ -250,7 +257,10 @@ export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
     weight: 3,
     width: 1.5,         // matches step width
     height: 2.05,       // collision Y range — irrelevant under unjumpable
-    depth: 1.5,         // covers the 1.2 m staircase footprint + margin
+    // Collision footprint covers the full staircase plus the
+    // widened top platform: 2 risers (0.4 each) + platform
+    // (0.8) = 1.6 m, plus a bit of margin.
+    depth: 1.8,
     color: 0x1a0a0a,
     baseY: 1.025,
     airOnly: false,
@@ -262,6 +272,12 @@ export const OBSTACLES: Record<ObstacleKind, ObstacleSpec> = {
     // on the floor was -1.1; add +0.9 to put feet on the top step
     // instead of the ground.
     visualOffsetY: -0.2,
+    // Push bouncer back into the platform area so he stands on the
+    // wider top step, not centred over the staircase. Platform
+    // centre is at z = -0.6 (computed in spawn code from the new
+    // step depths). Slight further back so he reads as "behind the
+    // riser" rather than perched on the front edge of the platform.
+    visualOffsetZ: -0.7,
     unjumpable: true,
     hasStaircase: true,
   },

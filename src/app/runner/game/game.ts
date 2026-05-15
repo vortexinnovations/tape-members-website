@@ -4126,11 +4126,19 @@ export class RunnerGame {
         // bouncer stands at the top. Attached to the collider mesh
         // so it scrolls with the obstacle. The visual is positioned
         // above (via visualOffsetY) so its feet land on the top step.
+        //
+        // Each step extends ALL THE WAY DOWN to the ground (height =
+        // STEP_RISE × (i + 1)), so the negative space under the
+        // staircase is filled — no floating risers. The top step is
+        // a wider PLATFORM (2× depth) for the bouncer to stand on.
+        // Steps stack from front to back, accumulated z-positions
+        // so variable depths work cleanly.
         if (spec.hasStaircase) {
           const NUM_STEPS = 3;
-          const STEP_H = 0.3;
+          const STEP_RISE = 0.3;    // each step's vertical rise
           const STEP_W = 1.5;
-          const STEP_D = 0.4;
+          const RISER_DEPTH = 0.4;  // depth of each of the lower steps
+          const PLATFORM_DEPTH = 0.8; // top step is a wider platform
           // Black matte material with the faintest metalness so the
           // colored point-light rig catches on the step faces —
           // pure 0x000000 reads as a hole-in-the-scene at the dark
@@ -4140,23 +4148,38 @@ export class RunnerGame {
             roughness: 0.6,
             metalness: 0.25,
           });
-          const stepGeo = new THREE.BoxGeometry(STEP_W, STEP_H, STEP_D);
-          // Collider local origin = collider centre at world (x,
-          // baseY, z). Steps sit on the ground (local y = -baseY)
-          // and ascend toward -Z (away from the player who
-          // approaches from +Z).
+          // Per-step depths, front (index 0) to back (top).
+          const depths: number[] = [];
           for (let i = 0; i < NUM_STEPS; i++) {
+            depths.push(i === NUM_STEPS - 1 ? PLATFORM_DEPTH : RISER_DEPTH);
+          }
+          const totalDepth = depths.reduce((a, b) => a + b, 0);
+          // Run a Z cursor from the front edge (+totalDepth/2) back
+          // toward -Z; each step's centre is cursor − depth/2.
+          let zCursor = totalDepth / 2;
+          for (let i = 0; i < NUM_STEPS; i++) {
+            const stepDepth = depths[i];
+            // Tall block extending from ground up to this step's
+            // top — fills the negative space under the staircase.
+            const stepHeight = STEP_RISE * (i + 1);
+            const stepGeo = new THREE.BoxGeometry(
+              STEP_W,
+              stepHeight,
+              stepDepth,
+            );
             const step = new THREE.Mesh(stepGeo, stepMat);
-            // Step centre Y in collider-local space — bottom of
-            // step 0 sits on world ground (y = 0 world = -baseY
-            // local), then stack upward by STEP_H per step.
-            step.position.y = -spec.baseY + STEP_H * (i + 0.5);
-            // Step 0 (i=0) is FRONT (closest to player, +Z),
-            // step N-1 is BACK (where the bouncer stands, -Z).
-            step.position.z = (NUM_STEPS - 1) * STEP_D * 0.5 - i * STEP_D;
+            // Centre Y so the box bottom sits on the world ground
+            // (which is local y = -spec.baseY).
+            step.position.y = -spec.baseY + stepHeight / 2;
+            step.position.z = zCursor - stepDepth / 2;
             mesh.add(step);
+            zCursor -= stepDepth;
           }
         }
+
+        // Manual Z-offset for the rigged visual — used by the
+        // bouncer to step back onto the platform.
+        visual.position.z += spec.visualOffsetZ ?? 0;
 
         // Random start offset so every bouncer is at a different
         // point in the dance loop. Otherwise the lineup of
