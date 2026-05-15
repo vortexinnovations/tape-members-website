@@ -816,7 +816,12 @@ export class HUD {
    * variant of the animation — more aggressive scale-in, brighter
    * glow, and a longer drift.
    */
-  flashPickup(spec: PickupSpec, displayScore: number, multiplier = 1.0) {
+  flashPickup(
+    spec: PickupSpec,
+    displayScore: number,
+    multiplier = 1.0,
+    combo = 0,
+  ) {
     const isBonus = multiplier > 1.0 + 1e-6;
     const isWater = spec.kind === 'water';
     const el = document.createElement('div');
@@ -835,12 +840,33 @@ export class HUD {
     const color = isWater
       ? '#9cd6ff'
       : `#${spec.color.toString(16).padStart(6, '0')}`;
-    const fontSize = isBonus ? '34px' : '22px';
+    // Font size scales progressively with the combo count so the
+    // emphasis grows the longer the player chains pickups. Starts
+    // just above the regular 22 px baseline at the first bonus tier
+    // and tops out around 36 px at combo 28+. Avoids the old hard
+    // jump from 22 → 34 px the moment a multiplier kicks in (felt
+    // jarring even at ×2).
+    let fontSize: string;
+    if (isBonus) {
+      const lifted = Math.max(0, combo);
+      const px = Math.min(36, 22 + lifted * 0.5);
+      fontSize = `${px.toFixed(1)}px`;
+    } else {
+      fontSize = '22px';
+    }
+    // Glow scales the same way — the brightest, double-stack glow is
+    // reserved for high-combo bonuses, mid-combo bonuses get a single
+    // softer glow, regular pickups stay subdued.
     const glow = isBonus
-      ? `0 0 24px ${color}, 0 0 48px ${color}, 0 2px 14px rgba(0, 0, 0, 0.85)`
+      ? combo >= 15
+        ? `0 0 24px ${color}, 0 0 48px ${color}, 0 2px 14px rgba(0, 0, 0, 0.85)`
+        : `0 0 16px ${color}, 0 2px 12px rgba(0, 0, 0, 0.78)`
       : '0 2px 12px rgba(0, 0, 0, 0.7)';
     const duration = isBonus ? '1500ms' : '1100ms';
-    const animation = isBonus
+    // The "bonus" animation has a larger scale punch — only use it for
+    // higher-combo bonuses so the early ones don't feel oversized.
+    const useBigAnim = isBonus && combo >= 10;
+    const animation = useBigAnim
       ? `tapeRunnerFlashBonus ${duration} cubic-bezier(0.22, 0.8, 0.36, 1) forwards`
       : `tapeRunnerFlash ${duration} cubic-bezier(0.22, 0.8, 0.36, 1) forwards`;
     Object.assign(el.style, {

@@ -3589,10 +3589,13 @@ export class RunnerGame {
         p.resolved = true;
       }
       if (p.mesh.position.z > WORLD.DESPAWN_Z) {
-        // If we passed it without collecting, the combo breaks.
-        if (!p.resolved && p.spec.kind !== 'water') {
-          this.breakCombo();
-        }
+        // Missing a bottle does NOT break the combo — combo is a
+        // pure time mechanic now (`comboWindowSeconds`). The HUD
+        // timer bar above the buzz meter is the visual contract:
+        // it drains over the admin-tunable window, and the combo
+        // breaks when the bar hits zero. Earlier we also broke on
+        // any uncollected pickup, but that made the visual bar
+        // disappear partway through and feel arbitrary.
         this.scene.remove(p.mesh);
         this.disposeMesh(p.mesh);
         this.pickups.splice(i, 1);
@@ -4933,7 +4936,7 @@ export class RunnerGame {
       const earned = Math.round(this.getPickupScore(spec) * mult);
       this.score += earned;
       this.bottlesCollected++;
-      this.hud.flashPickup(spec, earned, mult);
+      this.hud.flashPickup(spec, earned, mult, this.combo);
       this.hud.setCombo(this.combo, mult);
       // Tier transition (multiplier jumped) gets the combo SFX —
       // otherwise it's just a regular pickup ding. Avoids spamming
