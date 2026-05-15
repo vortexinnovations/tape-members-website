@@ -320,6 +320,45 @@ export class AudioManager {
   }
 
   /**
+   * Pause ONE loop without clearing the caller's intent and
+   * without affecting other loops. Use for gameplay-driven
+   * temporary silencing (e.g. mute the running loop while the
+   * player is airborne — footsteps don't make sense mid-jump).
+   * `resumeLoop(key)` brings it back from the same playback
+   * position.
+   */
+  pauseLoop(key: string): void {
+    const audio = this.loops.get(key);
+    if (!audio) return;
+    try {
+      audio.pause();
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Resume one loop that was previously pauseLoop()'d. No-op if
+   * muted (mute already enforces silence; unmuting will pick up
+   * the intent via _syncLoopsToMute). No-op if the caller never
+   * requested this loop via playLoop().
+   */
+  resumeLoop(key: string): void {
+    if (this.muted) return;
+    if (!this.loopWantPlaying.has(key)) return;
+    const audio = this.loops.get(key);
+    if (!audio) return;
+    try {
+      audio.volume = this._effectiveVolume(key);
+      audio.play().catch(() => {
+        // autoplay rejection — fine, next gesture will succeed
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
    * Pause every loop without clearing intent. Used by the bridge's
    * pause() entry — the player is backgrounding the app or the
    * Flutter wrapper is mid-transition; we want silence but want

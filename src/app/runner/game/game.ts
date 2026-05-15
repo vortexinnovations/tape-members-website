@@ -2782,6 +2782,9 @@ export class RunnerGame {
     this.playerVy = this.jumpVelocity;
     this.triggerJumpAnimation();
     this.audio.play('jump');
+    // Silence the running loop while airborne — no footsteps in
+    // mid-air. Resumed at the landing edge below.
+    this.audio.pauseLoop('running');
   }
 
   /**
@@ -2944,13 +2947,15 @@ export class RunnerGame {
     }
     const grounded = this.playerY <= PLAYER.BASE_Y + 0.01;
     // Landing edge — fires once on the frame the player touches
-    // down. Swap visibility back to the running character.
+    // down. Swap visibility back to the running character and
+    // resume the running-loop SFX that was paused on takeoff.
     if (grounded && this.wasInAir) {
       this.wasInAir = false;
       if (this.playerJumpVisual && this.playerVisual) {
         this.playerJumpVisual.visible = false;
         this.playerVisual.visible = true;
       }
+      this.audio.resumeLoop('running');
     }
     if (!grounded) this.wasInAir = true;
     if (grounded) {
