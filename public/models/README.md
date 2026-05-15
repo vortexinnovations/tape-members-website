@@ -5,17 +5,20 @@ runtime:
 
 | File | Purpose | Size |
 |---|---|---|
-| `runner_male.glb` | Player when `playerGender: 'male'` (default) — Draco-compressed | ~1.2 MB |
-| `runner_female.glb` | Player when `playerGender: 'female'` | ~870 KB |
-| `runner_jump_male.glb` | Jump animation character (male) — Draco-compressed | ~1.2 MB |
-| `runner_jump_female.glb` | Jump animation character (female) | ~880 KB |
-| `runner_fall_male.glb` | Game-over fall animation character (male) — Draco-compressed | ~1.2 MB |
-| `runner_fall_female.glb` | Game-over fall animation character (female) | ~925 KB |
-| `runner_dancer.glb` | Dancing-character obstacle (variant 1) — picked randomly per spawn | ~2.7 MB |
-| `runner_dancer_2.glb` | Dancing-character obstacle (variant 2, black-dress dancer) — picked randomly per spawn | ~2.7 MB |
-| `runner_bouncer.glb` | Arms-crossed bouncer obstacle on a staircase platform | ~1.3 MB |
-| `dancer_animated.glb` | Hip-hop podium dancer (blonde) cloned into each cage | ~1.3 MB |
-| `dancer_animated_dark.glb` | Hip-hop podium dancer (dark hair) — random alt | ~1.4 MB |
+All character GLBs are Draco-compressed (`KHR_draco_mesh_compression`)
+with webp textures. Sizes after the full pipeline:
+
+| `runner_male.glb` | Player when `playerGender: 'male'` (default) | ~780 KB |
+| `runner_female.glb` | Player when `playerGender: 'female'` | ~853 KB |
+| `runner_jump_male.glb` | Jump animation character (male) | ~788 KB |
+| `runner_jump_female.glb` | Jump animation character (female) | ~860 KB |
+| `runner_fall_male.glb` | Game-over fall animation character (male) | ~831 KB |
+| `runner_fall_female.glb` | Game-over fall animation character (female) | ~904 KB |
+| `runner_dancer.glb` | Dancing-character obstacle (variant 1) — picked randomly per spawn | ~925 KB |
+| `runner_dancer_2.glb` | Dancing-character obstacle (variant 2, black-dress dancer) — picked randomly per spawn | ~534 KB |
+| `runner_bouncer.glb` | Arms-crossed bouncer obstacle on a staircase platform | ~244 KB |
+| `dancer_animated.glb` | Hip-hop podium dancer (blonde) cloned into each cage | ~497 KB |
+| `dancer_animated_dark.glb` | Hip-hop podium dancer (dark hair) — random alt | ~472 KB |
 
 If a player or jump file is missing, the game silently falls back
 to the in-code capsule-stack placeholder character (player) or the
