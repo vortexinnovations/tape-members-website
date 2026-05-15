@@ -190,17 +190,23 @@ export class HUD {
     this.root.appendChild(topRow);
 
     // Buzz meter — horizontal pill, positioned absolutely at the
-    // bottom of the screen just ABOVE the combo chip. The cells
-    // are generated dynamically by `rebuildBuzzCells` so the count
-    // tracks the admin-configured maxTipsyLevel.
+    // BOTTOM of the screen. The cells are generated dynamically by
+    // `rebuildBuzzCells` so the count tracks the admin-configured
+    // maxTipsyLevel.
+    //
+    // Stack order (bottom to top): buzz meter → combo timer bar →
+    // combo chip (×N + N IN A ROW) → flash text. This puts the
+    // permanent buzz reference at the bottom and clusters all the
+    // combo info as a single "what just happened → multiplier →
+    // streak → time left" reading column above it.
     this.buzzWrap = document.createElement('div');
     Object.assign(this.buzzWrap.style, {
       position: 'absolute',
       left: '50%',
-      // Sit just above the combo chip (which sits at 80px above
-      // safe-area). Combo chip is ~32px tall + ~10px gap → buzz
-      // bottom at safe-area + 125px.
-      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 125px)',
+      // Bottom-most HUD element (after the score column, which lives
+      // in the top row). Sits 30 px above safe-area so it doesn't
+      // collide with the home-bar gesture area on iPhones.
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 30px)',
       transform: 'translateX(-50%)',
       display: 'flex',
       gap: '4px',
@@ -314,9 +320,12 @@ export class HUD {
     Object.assign(this.comboEl.style, {
       position: 'absolute',
       left: '50%',
-      // Combo readout sits ~80 px above the safe-area inset. Buzz
-      // bar floats ~45 px above this.
-      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 80px)',
+      // Combo chip sits ABOVE the combo timer bar in the new stack
+      // (buzz at 30 → combo bar at 75 → chip at 105 → flash text
+      // at 250). Keeps the multiplier + "N IN A ROW" caption
+      // grouped with the bar so the chip explains what the bar is
+      // counting down.
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 105px)',
       transform: 'translateX(-50%) scale(0.85)',
       transformOrigin: 'center center',
       display: 'flex',
@@ -444,19 +453,24 @@ export class HUD {
     } satisfies Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.flashContainer);
 
-    // ── Combo timer bar (sits above the buzz meter) ─────────────
+    // ── Combo timer bar (sits between the buzz meter + combo chip) ─
     // Width drains from 100% → 0% as the combo window expires.
-    // Hidden when there's no active combo.
+    // Hidden when there's no active combo. Width matches the buzz
+    // pill (synced in `rebuildBuzzCells` since the buzz pill's
+    // width depends on the admin-set max-tipsy-level).
     this.comboBarWrap = document.createElement('div');
     Object.assign(this.comboBarWrap.style, {
       position: 'absolute',
       left: '50%',
-      // 165 px above the safe-area bottom — buzz meter sits at
-      // 125 px (its bottom = +125), buzz wrapper is ~26 px tall →
-      // top of buzz at ~151 px. 165 px gives a 14 px gap.
-      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 165px)',
+      // Buzz pill bottom = 30 px, height ≈ 32 px → buzz top at
+      // ~62 px. 75 px gives a ~13 px gap, mirroring the spacing
+      // between the chip and the bar above it.
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 75px)',
       transform: 'translateX(-50%)',
-      width: '140px',
+      // Width is overwritten by `syncComboBarWidth()` once the
+      // buzz pill has been laid out. The default here is a safe
+      // fallback for the rAF gap before the first sync.
+      width: '102px',
       height: '4px',
       borderRadius: '999px',
       background: 'rgba(0, 0, 0, 0.4)',
@@ -479,6 +493,12 @@ export class HUD {
     } satisfies Partial<CSSStyleDeclaration>);
     this.comboBarWrap.appendChild(this.comboBarFill);
     this.root.appendChild(this.comboBarWrap);
+
+    // First buzz-cells build happened before comboBarWrap existed,
+    // so the width-sync inside rebuildBuzzCells was skipped. Run
+    // it again now that both exist — subsequent admin-driven
+    // setBuzzMaxLevel calls hit the sync directly.
+    this.rebuildBuzzCells(this.buzzMaxLevel);
 
     parent.appendChild(this.root);
 
@@ -738,6 +758,23 @@ export class HUD {
       } satisfies Partial<CSSStyleDeclaration>);
       this.buzzWrap.appendChild(cell);
       this.buzzCells.push(cell);
+    }
+    // Keep the combo timer bar's width in lock-step with the buzz
+    // pill so the two read as a single stacked block. Width is the
+    // sum of cells + inter-cell gaps + the pill's left/right
+    // padding (8 px each side). Doing this mathematically avoids a
+    // getBoundingClientRect() round-trip during construction (the
+    // wrap isn't in the DOM yet on the first call).
+    //
+    // Guard: the first rebuildBuzzCells() call fires during HUD
+    // construction BEFORE comboBarWrap is created. We sync the
+    // width again right after that wrap is built, so missing it on
+    // the very first call is fine.
+    if (this.comboBarWrap) {
+      const cellsW = cellWidth * n;
+      const gapsW = Math.max(0, n - 1) * 4;
+      const paddingW = 16;
+      this.comboBarWrap.style.width = `${cellsW + gapsW + paddingW}px`;
     }
   }
 
