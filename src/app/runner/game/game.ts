@@ -1629,17 +1629,20 @@ export class RunnerGame {
     tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
     tex.needsUpdate = true;
 
-    // 3. Build the pool. Plane is 6 m wide × 1.5 m deep — spans the
-    //    3 lanes (lane separators at x = ±1.2, outermost lane edges
-    //    at x = ±3) with a touch of margin. The plane is rotated
-    //    -π/2 on X so it lies flat on the floor; in that
-    //    orientation the canvas's local +Y axis maps to world -Z
-    //    (forward / away from the camera), so default-orientation
-    //    text reads correctly to a player approaching it on the
-    //    runway. y = 0.025 sits just above the floor stripes
-    //    (y = 0.02) so the text composites over them.
-    const PLANE_W = 6.0;
-    const PLANE_D = 1.5;
+    // 3. Build the pool. Plane is 6.9 m wide × 1.725 m deep (+15%
+    //    over the previous 6 × 1.5). Still fits within the runway's
+    //    7.2 m visual width — the outermost lane edges at x = ±3
+    //    are just inside the plane's x = ±3.45 extent, so the text
+    //    flows slightly past the lanes onto the runway shoulder.
+    //    The plane is rotated -π/2 on X so it lies flat on the
+    //    floor; in that orientation the canvas's local +Y axis
+    //    maps to world -Z (forward / away from the camera), so
+    //    default-orientation text reads correctly to a player
+    //    approaching it on the runway. y = 0.025 sits just above
+    //    the floor stripes (y = 0.02) so the text composites over
+    //    them.
+    const PLANE_W = 6.9;
+    const PLANE_D = 1.725;
     const geo = new THREE.PlaneGeometry(PLANE_W, PLANE_D);
     geo.rotateX(-Math.PI / 2);
     const mat = new THREE.MeshBasicMaterial({
