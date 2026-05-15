@@ -65,8 +65,15 @@ export class HUD {
    * moment the player's first swipe lands.
    */
   private inputHintEl: HTMLDivElement;
-  private flashEl: HTMLDivElement;
-  private flashTimer: number | null = null;
+  /** Container for transient pickup-flash notifications. Each
+   *  flashPickup() call spawns a new child element that animates
+   *  in, drifts down, and removes itself. Multiple can coexist
+   *  if pickups land in quick succession. */
+  private flashContainer: HTMLDivElement;
+  /** Thin horizontal bar above the buzz meter — width drains as
+   *  the combo window expires. Driven by setComboProgress(0..1). */
+  private comboBarWrap: HTMLDivElement;
+  private comboBarFill: HTMLDivElement;
   private comboFadeTimer: number | null = null;
   // Cached values for the combined subline ("1234m · 12 m/s"). We
   // accept distance + speed via separate setters but render them
@@ -107,6 +114,43 @@ export class HUD {
         @keyframes tapeRunnerSpin {
           0% { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
+        }
+        @keyframes tapeRunnerFlash {
+          0% {
+            opacity: 0;
+            transform: translate(-50%, -50%) scale(0.6);
+          }
+          12% {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1.08);
+          }
+          22% {
+            transform: translate(-50%, -50%) scale(1.0);
+          }
+          100% {
+            opacity: 0;
+            transform: translate(-50%, calc(-50% + 60px)) scale(0.95);
+          }
+        }
+        @keyframes tapeRunnerFlashBonus {
+          0% {
+            opacity: 0;
+            transform: translate(-50%, -50%) scale(0.5);
+          }
+          10% {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1.35);
+          }
+          18% {
+            transform: translate(-50%, -50%) scale(1.18);
+          }
+          26% {
+            transform: translate(-50%, -50%) scale(1.28);
+          }
+          100% {
+            opacity: 0;
+            transform: translate(-50%, calc(-50% + 90px)) scale(1.05);
+          }
         }
       `;
       document.head.appendChild(style);
@@ -373,21 +417,60 @@ export class HUD {
     parent.appendChild(this.vignetteEl);
     parent.appendChild(this.blurOverlayEl);
 
-    // ── Brief flash for pickup names (e.g. "Champagne +50") ──────
-    this.flashEl = document.createElement('div');
-    Object.assign(this.flashEl.style, {
+    // ── Transient pickup-flash container ─────────────────────────
+    // Each pickup spawns a child div positioned absolutely at the
+    // container's centre. Children own their own animation +
+    // self-removal — the container exists so we have one DOM node
+    // to append into, not many across the body.
+    this.flashContainer = document.createElement('div');
+    Object.assign(this.flashContainer.style, {
       position: 'absolute',
       left: '50%',
       top: '54%',
-      transform: 'translate(-50%, -50%)',
-      fontSize: '22px',
-      fontWeight: '800',
-      letterSpacing: '0.5px',
-      textShadow: '0 2px 12px rgba(0, 0, 0, 0.7)',
-      opacity: '0',
-      transition: 'opacity 0.18s ease, transform 0.6s ease',
+      // The children translate themselves with their own transform,
+      // so the container is a simple anchor point.
+      width: '0',
+      height: '0',
+      pointerEvents: 'none',
+      zIndex: '5',
     } satisfies Partial<CSSStyleDeclaration>);
-    this.root.appendChild(this.flashEl);
+    this.root.appendChild(this.flashContainer);
+
+    // ── Combo timer bar (sits above the buzz meter) ─────────────
+    // Width drains from 100% → 0% as the combo window expires.
+    // Hidden when there's no active combo.
+    this.comboBarWrap = document.createElement('div');
+    Object.assign(this.comboBarWrap.style, {
+      position: 'absolute',
+      left: '50%',
+      // 165 px above the safe-area bottom — buzz meter sits at
+      // 125 px (its bottom = +125), buzz wrapper is ~26 px tall →
+      // top of buzz at ~151 px. 165 px gives a 14 px gap.
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 165px)',
+      transform: 'translateX(-50%)',
+      width: '140px',
+      height: '4px',
+      borderRadius: '999px',
+      background: 'rgba(0, 0, 0, 0.4)',
+      overflow: 'hidden',
+      opacity: '0',
+      transition: 'opacity 0.18s ease',
+      zIndex: '4',
+    } satisfies Partial<CSSStyleDeclaration>);
+    this.comboBarFill = document.createElement('div');
+    Object.assign(this.comboBarFill.style, {
+      width: '100%',
+      height: '100%',
+      background:
+        'linear-gradient(90deg, #ffd45a 0%, #ffaa3a 60%, #ff6b3a 100%)',
+      borderRadius: '999px',
+      transformOrigin: 'left center',
+      transform: 'scaleX(1)',
+      // No transition — width is driven each frame from game.ts,
+      // CSS easing would lag behind the real timer.
+    } satisfies Partial<CSSStyleDeclaration>);
+    this.comboBarWrap.appendChild(this.comboBarFill);
+    this.root.appendChild(this.comboBarWrap);
 
     parent.appendChild(this.root);
 
@@ -671,6 +754,10 @@ export class HUD {
     if (multiplier <= 1.0 + 1e-6) {
       this.comboEl.style.opacity = '0';
       this.comboEl.style.transform = 'translateX(-50%) scale(0.85)';
+      // Combo timer bar is only meaningful when a multiplier is
+      // active — hide it whenever the multiplier drops to ×1.
+      this.comboBarWrap.style.opacity = '0';
+      this.comboBarFill.style.transform = 'scaleX(0)';
       return;
     }
     // Big multiplier — show one decimal place only if non-integer
@@ -717,25 +804,84 @@ export class HUD {
    * Auto-fades. Multiple rapid pickups overwrite the text without
    * stacking — keeps the screen clean.
    */
-  flashPickup(spec: PickupSpec, displayScore: number) {
-    if (spec.kind === 'water') {
-      this.flashEl.textContent = `Water -1 buzz`;
-      this.flashEl.style.color = '#9cd6ff';
+  /**
+   * Spawn a transient pickup-flash notification. Each call creates
+   * a fresh DOM element that animates in (pop + scale), drifts
+   * downward, fades out, and removes itself. Multiple flashes can
+   * coexist — collecting two bottles in quick succession shows
+   * both notifications, with the older one already drifting down
+   * while the new one appears at centre.
+   *
+   * Bonus pickups (combo multiplier > 1) get a larger, flashier
+   * variant of the animation — more aggressive scale-in, brighter
+   * glow, and a longer drift.
+   */
+  flashPickup(spec: PickupSpec, displayScore: number, multiplier = 1.0) {
+    const isBonus = multiplier > 1.0 + 1e-6;
+    const isWater = spec.kind === 'water';
+    const el = document.createElement('div');
+    if (isWater) {
+      el.textContent = 'Water -1 buzz';
+    } else if (isBonus) {
+      // Multiplier badge inline so the bonus reads as "what +
+      // why", not just a bigger number.
+      const multText = Number.isInteger(multiplier)
+        ? multiplier.toString()
+        : multiplier.toFixed(1);
+      el.textContent = `${spec.label} +${displayScore} (×${multText})`;
     } else {
-      this.flashEl.textContent = `${spec.label} +${displayScore}`;
-      this.flashEl.style.color = `#${spec.color.toString(16).padStart(6, '0')}`;
+      el.textContent = `${spec.label} +${displayScore}`;
     }
-    this.flashEl.style.opacity = '1';
-    this.flashEl.style.transform = 'translate(-50%, -70%)';
-    if (this.flashTimer !== null) window.clearTimeout(this.flashTimer);
-    this.flashTimer = window.setTimeout(() => {
-      this.flashEl.style.opacity = '0';
-      this.flashEl.style.transform = 'translate(-50%, -50%)';
-    }, 650);
+    const color = isWater
+      ? '#9cd6ff'
+      : `#${spec.color.toString(16).padStart(6, '0')}`;
+    const fontSize = isBonus ? '34px' : '22px';
+    const glow = isBonus
+      ? `0 0 24px ${color}, 0 0 48px ${color}, 0 2px 14px rgba(0, 0, 0, 0.85)`
+      : '0 2px 12px rgba(0, 0, 0, 0.7)';
+    const duration = isBonus ? '1500ms' : '1100ms';
+    const animation = isBonus
+      ? `tapeRunnerFlashBonus ${duration} cubic-bezier(0.22, 0.8, 0.36, 1) forwards`
+      : `tapeRunnerFlash ${duration} cubic-bezier(0.22, 0.8, 0.36, 1) forwards`;
+    Object.assign(el.style, {
+      position: 'absolute',
+      left: '0',
+      top: '0',
+      transform: 'translate(-50%, -50%) scale(0.6)',
+      fontSize,
+      fontWeight: '800',
+      letterSpacing: '0.5px',
+      color,
+      textShadow: glow,
+      // Keep on one line — 1000-point text was wrapping into two
+      // rows on narrow screens even though there was room.
+      whiteSpace: 'nowrap',
+      opacity: '0',
+      willChange: 'transform, opacity',
+      animation,
+    } satisfies Partial<CSSStyleDeclaration>);
+    el.addEventListener('animationend', () => el.remove(), { once: true });
+    this.flashContainer.appendChild(el);
+  }
+
+  /**
+   * Drive the combo timer bar above the buzz meter.
+   * `progress` is 0..1 where 1 = combo just started (full bar) and
+   * 0 = combo window expired. Bar hides itself when progress ≤ 0,
+   * shows itself when progress > 0.
+   */
+  setComboProgress(progress: number) {
+    const clamped = Math.max(0, Math.min(1, progress));
+    if (clamped <= 0) {
+      this.comboBarWrap.style.opacity = '0';
+      this.comboBarFill.style.transform = 'scaleX(0)';
+      return;
+    }
+    this.comboBarWrap.style.opacity = '1';
+    this.comboBarFill.style.transform = `scaleX(${clamped})`;
   }
 
   dispose() {
-    if (this.flashTimer !== null) window.clearTimeout(this.flashTimer);
     if (this.comboFadeTimer !== null) window.clearTimeout(this.comboFadeTimer);
     this.root.remove();
     this.vignetteEl.remove();

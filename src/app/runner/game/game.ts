@@ -3766,6 +3766,11 @@ export class RunnerGame {
         this.breakCombo();
       }
     }
+    this.hud.setComboProgress(
+      this.combo > 0
+        ? 1 - this.comboTimer / Math.max(this.comboWindowSeconds, 0.001)
+        : 0,
+    );
 
     // ── Spawn pickups + obstacles ─────────────────────────────
     // Two stacked effects on each interval:
@@ -5004,7 +5009,7 @@ export class RunnerGame {
       const earned = Math.round(this.getPickupScore(spec) * mult);
       this.score += earned;
       this.bottlesCollected++;
-      this.hud.flashPickup(spec, earned);
+      this.hud.flashPickup(spec, earned, mult);
       this.hud.setCombo(this.combo, mult);
       // Tier transition (multiplier jumped) gets the combo SFX —
       // otherwise it's just a regular pickup ding. Avoids spamming
