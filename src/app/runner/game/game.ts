@@ -1503,7 +1503,7 @@ export class RunnerGame {
       offsetY: number;
     }> = [
       { url: '/models/runner_dancer.glb',   rotationY: Math.PI, scale: 1.0, offsetY: 0 },
-      { url: '/models/runner_dancer_2.glb', rotationY: 0,       scale: 2.0, offsetY: -1.4 },
+      { url: '/models/runner_dancer_2.glb', rotationY: 0,       scale: 2.0, offsetY: -1.3 },
     ];
     const loader = makeGltfLoader();
     const settled = await Promise.allSettled(
