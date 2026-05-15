@@ -1749,8 +1749,8 @@ export class RunnerGame {
       return tex;
     });
 
-    const PORTRAIT_SIZE = 1.4;       // 1.4 × 1.4 m
-    const PORTRAIT_Y = 4.0;          // mid-height on the wall
+    const PORTRAIT_SIZE = 1.68;      // 1.68 × 1.68 m (20% larger)
+    const PORTRAIT_Y = 3.5;           // mid-height on the wall (0.5 m lower)
     const PORTRAIT_SPACING_Z = 9;    // one per 9 m — matches podium rhythm
     // Pool 10 portraits per wall in the −9 m to −90 m range and
     // wrap with the standard POOL_LENGTH = 90 m used by floor

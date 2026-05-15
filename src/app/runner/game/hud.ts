@@ -209,8 +209,11 @@ export class HUD {
       bottom: 'calc(env(safe-area-inset-bottom, 0px) + 30px)',
       transform: 'translateX(-50%)',
       display: 'flex',
-      gap: '4px',
-      padding: '6px 8px',
+      // Cell gap + padding scaled 20% from the original 4 / 6 / 8.
+      // Combo bar's width-sync math (in rebuildBuzzCells) mirrors
+      // these numbers — if you change them here, change them there.
+      gap: '5px',
+      padding: '7px 10px',
       borderRadius: '999px',
       background: 'rgba(0, 0, 0, 0.35)',
       backdropFilter: 'blur(8px)',
@@ -321,11 +324,11 @@ export class HUD {
       position: 'absolute',
       left: '50%',
       // Combo chip sits ABOVE the combo timer bar in the new stack
-      // (buzz at 30 → combo bar at 75 → chip at 105 → flash text
+      // (buzz at 30 → combo bar at 82 → chip at 112 → flash text
       // at 250). Keeps the multiplier + "N IN A ROW" caption
       // grouped with the bar so the chip explains what the bar is
       // counting down.
-      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 105px)',
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 112px)',
       transform: 'translateX(-50%) scale(0.85)',
       transformOrigin: 'center center',
       display: 'flex',
@@ -462,16 +465,16 @@ export class HUD {
     Object.assign(this.comboBarWrap.style, {
       position: 'absolute',
       left: '50%',
-      // Buzz pill bottom = 30 px, height ≈ 32 px → buzz top at
-      // ~62 px. 75 px gives a ~13 px gap, mirroring the spacing
-      // between the chip and the bar above it.
-      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 75px)',
+      // Buzz pill bottom = 30 px, height ≈ 38 px (24 cell + 14
+      // padding) → buzz top at ~68 px. 82 px gives a ~14 px gap,
+      // mirroring the spacing between the chip and the bar above.
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 82px)',
       transform: 'translateX(-50%)',
-      // Width is overwritten by `syncComboBarWidth()` once the
+      // Width is overwritten by `rebuildBuzzCells()` once the
       // buzz pill has been laid out. The default here is a safe
       // fallback for the rAF gap before the first sync.
-      width: '102px',
-      height: '4px',
+      width: '125px',
+      height: '5px',
       borderRadius: '999px',
       background: 'rgba(0, 0, 0, 0.4)',
       overflow: 'hidden',
@@ -745,14 +748,16 @@ export class HUD {
     this.buzzCells = [];
     // Narrow the per-cell width as the count grows so the whole
     // pill stays roughly the same total width on phones. Floor at
-    // 8px so cells are still tappable-ish at extreme counts.
-    const cellWidth = Math.max(8, Math.min(14, Math.round(70 / n)));
+    // 10px so cells are still tappable-ish at extreme counts. Base
+    // numbers are 20% larger than the original 70 / 8-14 cap (the
+    // whole buzz pill grew by 20% per design).
+    const cellWidth = Math.max(10, Math.min(17, Math.round(84 / n)));
     for (let i = 0; i < n; i++) {
       const cell = document.createElement('div');
       Object.assign(cell.style, {
         width: `${cellWidth}px`,
-        height: '20px',
-        borderRadius: '4px',
+        height: '24px',
+        borderRadius: '5px',
         background: 'rgba(255, 255, 255, 0.12)',
         transition: 'background 0.2s ease',
       } satisfies Partial<CSSStyleDeclaration>);
@@ -761,10 +766,10 @@ export class HUD {
     }
     // Keep the combo timer bar's width in lock-step with the buzz
     // pill so the two read as a single stacked block. Width is the
-    // sum of cells + inter-cell gaps + the pill's left/right
-    // padding (8 px each side). Doing this mathematically avoids a
-    // getBoundingClientRect() round-trip during construction (the
-    // wrap isn't in the DOM yet on the first call).
+    // sum of cells + inter-cell gaps (5 px) + the pill's left/right
+    // padding (10 px each side, 20 total). Doing this mathematically
+    // avoids a getBoundingClientRect() round-trip during construction
+    // (the wrap isn't in the DOM yet on the first call).
     //
     // Guard: the first rebuildBuzzCells() call fires during HUD
     // construction BEFORE comboBarWrap is created. We sync the
@@ -772,8 +777,8 @@ export class HUD {
     // the very first call is fine.
     if (this.comboBarWrap) {
       const cellsW = cellWidth * n;
-      const gapsW = Math.max(0, n - 1) * 4;
-      const paddingW = 16;
+      const gapsW = Math.max(0, n - 1) * 5;
+      const paddingW = 20;
       this.comboBarWrap.style.width = `${cellsW + gapsW + paddingW}px`;
     }
   }
