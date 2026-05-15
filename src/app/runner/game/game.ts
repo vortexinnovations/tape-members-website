@@ -272,6 +272,10 @@ export class RunnerGame {
     material: THREE.MeshBasicMaterial;
     phase: number;
   }> = [];
+  /** "ALL ROADS LEAD TO TAPE" floor-text bands painted across the
+   *  runway. Pool wraps in the standard 90 m window. Spacing
+   *  admin-tunable via `worldFloorTextSpacingZ`; ≤ 0 disables. */
+  private floorTexts: THREE.Mesh[] = [];
   /**
    * Admin-tunable spacings for the four world-scenery pools. All
    * default to the historical hard-coded values so an unseeded
@@ -286,6 +290,7 @@ export class RunnerGame {
   private worldPortraitSpacingZ = 9;
   private worldWallSpeakerSpacingZ = 18;
   private worldWallStrobeSpacingZ = 12;
+  private worldFloorTextSpacingZ = 30;
   /** Latch: world decorations (portraits, booths, podiums, speakers,
    *  strobes) are built on first `init()` AFTER settings arrive so
    *  the admin's spacing overrides take effect immediately. Flip
@@ -782,13 +787,11 @@ export class RunnerGame {
     // so the whole effect is one draw call.
     this.buildLEDCeiling();
 
-    // ── Horizon sign ───────────────────────────────────────────
-    // "ALL ROADS LEAD TO TAPE" rendered in the Embossing Tape font
-    // on a plane far down the runway. Static (no scroll group), so
-    // it sits in the visual horizon while the world streams past.
-    // Async because the font is fetched at runtime via FontFace;
-    // the sign pops in once it lands (fire-and-forget).
-    void this.buildHorizonSign();
+    // The old "ALL ROADS LEAD TO TAPE" billboard at the end of the
+    // runway has been replaced by floor text — a pool of flat-on-
+    // the-floor text bands that scroll past the player. Built from
+    // `applyWorldDecorations()` so the admin's spacing kicks in on
+    // the first play.
 
     // TAPE dancer podiums (also deferred — see applyWorldDecorations).
 
@@ -1523,31 +1526,31 @@ export class RunnerGame {
    * GPU does everything in the fragment shader.
    */
   /**
-   * "ALL ROADS LEAD TO TAPE" sign at the far end of the visible
-   * runway. Stays in the horizon — not added to any scroll pool,
-   * so the world streams past it while the sign visually sits
-   * unmoving in the distance, mimicking real road signage.
+   * Floor text — "ALL ROADS LEAD TO TAPE" painted across the
+   * runway, spanning the 3 lanes, recurring every
+   * `worldFloorTextSpacingZ` metres. Replaces the old horizon
+   * billboard with something the player runs OVER instead of past.
    *
-   * Built as a CanvasTexture mapped onto a plane: the Embossing
-   * Tape font (weight 800 = embossing-tape-3.ttf) is loaded
-   * asynchronously via FontFace from /public/fonts/, then the
-   * text is rendered into a high-resolution 2048×512 canvas with
-   * a red glow for the neon-on-distant-sign feel. The plane
-   * faces the camera (default plane normal = +Z, camera is at
-   * +Z relative to the sign at z = -180) and sits at z = -180,
-   * just inside the camera's far clip (200).
+   * Implementation: one shared CanvasTexture (Embossing Tape font,
+   * same red-glow + cream-core colour pair as the old sign), mapped
+   * onto a 6 m × 1.5 m PlaneGeometry. The plane is rotated -π/2 on
+   * X so it lies flat on the floor, then a pool of these meshes is
+   * spaced along the runway and scrolled in the standard 90 m wrap.
    *
-   * Async because the font fetch is async — caller fires-and-
-   * forgets. If the font fails to load the canvas falls back to
-   * a generic sans-serif (still legible, just not on-brand).
+   * Async because the font fetch is async. Fire-and-forget — the
+   * text pops in once the FontFace loads. If the font load fails,
+   * the canvas falls back to a generic sans-serif (legible but not
+   * on-brand).
+   *
+   * Spacing of 0 or less disables the pool entirely.
    */
-  private async buildHorizonSign() {
-    // 1. Load the Embossing Tape font directly via the FontFace
-    //    API. Next.js's next/font/local already loads this font
-    //    for HTML elements via a hashed family name, but canvas
-    //    drawing needs a known family name that we can reference
-    //    in the font-string. Putting our own copy in /public/
-    //    sidesteps the next/font hashing entirely.
+  private async buildFloorText() {
+    const SPACING = this.worldFloorTextSpacingZ;
+    if (!(SPACING > 0)) return;
+
+    // 1. Load the Embossing Tape font via FontFace, same as the
+    //    previous horizon sign. Idempotent — adding the same face
+    //    twice is harmless.
     const FONT_FAMILY = 'TapeRunnerSign';
     try {
       const face = new FontFace(
@@ -1557,85 +1560,80 @@ export class RunnerGame {
       await face.load();
       (document.fonts as FontFaceSet).add(face);
     } catch (e) {
-      // Font fetch failed — fall through with default font. The
-      // sign will still render readably, just generic.
       // eslint-disable-next-line no-console
-      console.debug('[runner] horizon-sign font load failed', e);
+      console.debug('[runner] floor-text font load failed', e);
     }
 
-    // 2. Render the text onto a high-res canvas with a dark
-    //    rounded backing rectangle so the sign reads against the
-    //    LED-ceiling colour wash even at long distance.
+    // 2. Render the text onto a wide canvas — same red-glow over
+    //    cream-core treatment as the legacy horizon sign. NO dark
+    //    backing rectangle here: we want the text to read as
+    //    painted directly onto the runway floor, not as a billboard
+    //    that happens to be lying down. Transparent background lets
+    //    the floor stripes show through around the letters.
     const PIXEL_W = 2048;
-    const PIXEL_H = 640;
+    const PIXEL_H = 512;
     const canvas = document.createElement('canvas');
     canvas.width = PIXEL_W;
     canvas.height = PIXEL_H;
     const ctx = canvas.getContext('2d');
-    if (!ctx) return; // wildly unlikely; bail rather than crash
+    if (!ctx) return;
     ctx.clearRect(0, 0, PIXEL_W, PIXEL_H);
 
-    // Dark backing panel — matte black with a subtle red rim so
-    // the sign reads as an illuminated marquee on a billboard,
-    // not floating text in space. Inset slightly from canvas
-    // edges so the rim is visible and the texture has some margin.
-    const INSET = 24;
-    ctx.fillStyle = '#100307';
-    ctx.fillRect(INSET, INSET, PIXEL_W - 2 * INSET, PIXEL_H - 2 * INSET);
-    ctx.strokeStyle = '#ff2040';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(INSET, INSET, PIXEL_W - 2 * INSET, PIXEL_H - 2 * INSET);
-
-    // Text — two passes for layered glow + core.
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = `260px "${FONT_FAMILY}", sans-serif`;
+    // Pass 1: warm red glow halo.
     ctx.shadowColor = '#ff3050';
-    ctx.shadowBlur = 40;
+    ctx.shadowBlur = 48;
     ctx.fillStyle = '#ff5566';
     ctx.fillText('ALL ROADS LEAD TO TAPE', PIXEL_W / 2, PIXEL_H / 2);
-    ctx.shadowBlur = 16;
+    // Pass 2: cream-pink core — bright fill on top of the glow.
+    ctx.shadowBlur = 18;
     ctx.fillStyle = '#ffe0e2';
     ctx.fillText('ALL ROADS LEAD TO TAPE', PIXEL_W / 2, PIXEL_H / 2);
 
-    // 3. Build the mesh.
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
     tex.needsUpdate = true;
 
-    // The sign reads as a marquee at the end of the runway. It
-    // also needs to be visible through the scene's FogExp2 (density
-    // 0.020) — at z = -120 the fog factor is exp(-(0.020*120)²) ≈
-    // 0.003, i.e. 99.7% fogged out. Two-part fix:
-    //   1. fog: false on the material — the sign renders at full
-    //      opacity regardless of distance, so the user can pick a
-    //      distance based purely on composition.
-    //   2. Move closer to z = -50 (was -120) so the sign reads
-    //      clearly without needing players to squint into the haze.
-    //
-    // Size kept at 20 m × ~6.3 m — narrower than the old 30 m wide
-    // value because at z = -50 (vs the old -120) the angular size
-    // would otherwise be 2.4× larger and dominate the play area.
-    // User asked us to start closer and they'll iterate from there.
-    const SIGN_W = 20;
-    const SIGN_H = SIGN_W * (PIXEL_H / PIXEL_W); // ~6.3 m
-    const geo = new THREE.PlaneGeometry(SIGN_W, SIGN_H);
+    // 3. Build the pool. Plane is 6 m wide × 1.5 m deep — spans the
+    //    3 lanes (lane separators at x = ±1.2, outermost lane edges
+    //    at x = ±3) with a touch of margin. The plane is rotated
+    //    -π/2 on X so it lies flat on the floor; in that
+    //    orientation the canvas's local +Y axis maps to world -Z
+    //    (forward / away from the camera), so default-orientation
+    //    text reads correctly to a player approaching it on the
+    //    runway. y = 0.025 sits just above the floor stripes
+    //    (y = 0.02) so the text composites over them.
+    const PLANE_W = 6.0;
+    const PLANE_D = 1.5;
+    const geo = new THREE.PlaneGeometry(PLANE_W, PLANE_D);
+    geo.rotateX(-Math.PI / 2);
     const mat = new THREE.MeshBasicMaterial({
       map: tex,
       transparent: true,
       depthWrite: false,
       toneMapped: false,
+      // Disable scene fog on the text — same trick as the legacy
+      // sign so the writing stays readable when it's still far down
+      // the runway.
       fog: false,
     });
 
-    const sign = new THREE.Mesh(geo, mat);
-    // Centred in the lane, well above the runway so it reads as
-    // overhead signage. y = 6.5 sits just below the LED ceiling
-    // at y = 8.5 — comfortably in the camera's view, doesn't
-    // collide with the dancer podiums.
-    sign.position.set(0, 6.5, -50);
-    this.scene.add(sign);
+    const SPACING_Z = Math.max(2.0, SPACING);
+    const POOL_LENGTH = 90; // matches the rest of the wall scenery
+    const NUM = Math.max(1, Math.floor(POOL_LENGTH / SPACING_Z));
+    // Start the first band a few metres ahead of the camera so it
+    // scrolls into view rather than sitting underneath the player
+    // on game start.
+    const START_Z = -SPACING_Z * 0.5;
+    for (let i = 0; i < NUM; i++) {
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(0, 0.025, START_Z - i * SPACING_Z);
+      this.scene.add(mesh);
+      this.floorTexts.push(mesh);
+    }
   }
 
   /**
@@ -2402,6 +2400,10 @@ export class RunnerGame {
     this.buildDancerPodiums();
     this.buildWallSpeakers(WALL_X);
     this.buildWallStrobes(WALL_X);
+    // Floor text is async (font fetch). Fire-and-forget — the
+    // pool pops in once the FontFace resolves, same pattern the
+    // legacy horizon sign used.
+    void this.buildFloorText();
     this.decorationsApplied = true;
   }
 
@@ -3820,6 +3822,11 @@ export class RunnerGame {
     for (const s of this.wallSpeakers) {
       s.position.z += scroll;
       if (s.position.z > 4) s.position.z -= 90;
+    }
+    // ── Scroll floor-text bands (same 90 m wavelength)
+    for (const f of this.floorTexts) {
+      f.position.z += scroll;
+      if (f.position.z > 4) f.position.z -= 90;
     }
     // ── Scroll wall strobes (same 90 m wavelength) + per-frame
     // pulse: each strobe modulates its emissive panel opacity on a
@@ -5568,6 +5575,9 @@ export class RunnerGame {
       }
       if (typeof s.worldWallStrobeSpacingZ === 'number') {
         this.worldWallStrobeSpacingZ = s.worldWallStrobeSpacingZ;
+      }
+      if (typeof s.worldFloorTextSpacingZ === 'number') {
+        this.worldFloorTextSpacingZ = s.worldFloorTextSpacingZ;
       }
 
       // ── Spawn pacing ────────────────────────────────────────

@@ -121,6 +121,9 @@ export type InitPayload = {
     worldPortraitSpacingZ?: number;
     worldWallSpeakerSpacingZ?: number;
     worldWallStrobeSpacingZ?: number;
+    /** Metres between consecutive "ALL ROADS LEAD TO TAPE" floor-
+     *  text bands. ≤ 0 disables the pool entirely. */
+    worldFloorTextSpacingZ?: number;
     // ── Player feel (Three.js only) ─────────────────────────────
     jumpVelocity?: number;
     laneChangeSeconds?: number;
