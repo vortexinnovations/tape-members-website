@@ -1801,8 +1801,9 @@ export class RunnerGame {
    * Bottle selection per bucket is deterministic-by-booth-index so
    * the same booth shows the same bottles every wrap (no jitter).
    * A methuselah (the giant bottle) takes the whole bucket alone;
-   * otherwise the bucket holds 2–4 smaller bottles (champagne,
-   * magnum, vodka mini, vodka bottle) in random combination.
+   * otherwise the bucket holds a mix of champagne / magnum / vodka
+   * pickup models (same models the runway uses, scaled down to bucket
+   * size) plus the occasional tiny water bottle as a decorative prop.
    */
   private buildVIPBooths(wallX: number) {
     // Layout constants
@@ -1848,118 +1849,6 @@ export class RunnerGame {
       depthWrite: false,
       toneMapped: false,
     });
-    // Bottle materials — reused across all booths.
-    const champagneGlassMat = new THREE.MeshStandardMaterial({
-      color: 0x0a1a14,
-      roughness: 0.22,
-      metalness: 0.50,
-      emissive: 0x0e2018,
-      emissiveIntensity: 0.20,
-    });
-    const champagneFoilMat = new THREE.MeshStandardMaterial({
-      color: 0x141414,
-      roughness: 0.35,
-      metalness: 0.75,
-    });
-    const vodkaGlassMat = new THREE.MeshStandardMaterial({
-      color: 0xeaeae8,
-      roughness: 0.18,
-      metalness: 0.20,
-      transparent: true,
-      opacity: 0.65,
-    });
-    const vodkaCapMat = new THREE.MeshStandardMaterial({
-      color: 0xc8c8cc,
-      roughness: 0.35,
-      metalness: 0.80,
-    });
-
-    // ── Bottle-builder helpers ───────────────────────────────
-    // Simplified versions of the gameplay-pickup bottles — same
-    // silhouettes, fewer pieces because they're only seen
-    // briefly from across the runway in a packed booth scene.
-    const buildChampagneLike = (heightScale: number, radiusScale: number) => {
-      const g = new THREE.Group();
-      const bodyR = 0.075 * radiusScale;
-      const bodyH = 0.50 * heightScale;
-      const shoulderH = 0.10 * heightScale;
-      const neckH = 0.20 * heightScale;
-      const neckR = bodyR * 0.32;
-      const foilH = neckH * 0.55;
-      const body = new THREE.Mesh(
-        new THREE.CylinderGeometry(bodyR * 0.96, bodyR, bodyH, 12),
-        champagneGlassMat,
-      );
-      body.position.y = bodyH / 2;
-      g.add(body);
-      const shoulder = new THREE.Mesh(
-        new THREE.CylinderGeometry(neckR, bodyR * 0.96, shoulderH, 10),
-        champagneGlassMat,
-      );
-      shoulder.position.y = bodyH + shoulderH / 2;
-      g.add(shoulder);
-      const neck = new THREE.Mesh(
-        new THREE.CylinderGeometry(neckR * 0.96, neckR, neckH, 8),
-        champagneGlassMat,
-      );
-      neck.position.y = bodyH + shoulderH + neckH / 2;
-      g.add(neck);
-      const foil = new THREE.Mesh(
-        new THREE.CylinderGeometry(neckR * 1.12, neckR * 1.08, foilH, 8),
-        champagneFoilMat,
-      );
-      foil.position.y = bodyH + shoulderH + neckH - foilH / 2;
-      g.add(foil);
-      return g;
-    };
-
-    const buildVodkaBottleLike = () => {
-      const g = new THREE.Group();
-      const bodyR = 0.07;
-      const bodyH = 0.38;
-      const shoulderH = 0.04;
-      const neckH = 0.08;
-      const neckR = bodyR * 0.40;
-      const capH = 0.04;
-      const body = new THREE.Mesh(
-        new THREE.CylinderGeometry(bodyR, bodyR, bodyH, 10),
-        vodkaGlassMat,
-      );
-      body.position.y = bodyH / 2;
-      g.add(body);
-      const shoulder = new THREE.Mesh(
-        new THREE.CylinderGeometry(neckR, bodyR, shoulderH, 10),
-        vodkaGlassMat,
-      );
-      shoulder.position.y = bodyH + shoulderH / 2;
-      g.add(shoulder);
-      const neck = new THREE.Mesh(
-        new THREE.CylinderGeometry(neckR, neckR, neckH, 8),
-        vodkaGlassMat,
-      );
-      neck.position.y = bodyH + shoulderH + neckH / 2;
-      g.add(neck);
-      const cap = new THREE.Mesh(
-        new THREE.CylinderGeometry(neckR * 1.15, neckR * 1.15, capH, 8),
-        vodkaCapMat,
-      );
-      cap.position.y = bodyH + shoulderH + neckH + capH / 2;
-      g.add(cap);
-      return g;
-    };
-
-    const buildVodkaMiniLike = () => {
-      const g = new THREE.Group();
-      const r = 0.05;
-      const h = 0.10;
-      const glass = new THREE.Mesh(
-        new THREE.CylinderGeometry(r * 1.05, r * 0.85, h, 10),
-        vodkaGlassMat,
-      );
-      glass.position.y = h / 2;
-      g.add(glass);
-      return g;
-    };
 
     // Deterministic small PRNG (mulberry32) seeded by booth index
     // so bottle selection is stable across re-wraps.
@@ -1973,26 +1862,52 @@ export class RunnerGame {
       };
     };
 
+    // ── Bucket bottle pool ────────────────────────────────────
+    // All bottles are built via the shared buildPickupVisual()
+    // method so the booth shows the exact same silhouettes as
+    // the runway pickups (champagne foil + green label + dark
+    // glass, vodka with screw cap, vodka shot glass). Each entry
+    // has a per-spec scale to fit the bottles into a bucket
+    // (runway pickups are gameplay-prop-sized, ~3× real bottle
+    // height; booth bottles are scaled to read like real bottles
+    // sitting in a real ice bucket).
+    //
+    // Water is included as a small decorative prop at 0.2× of its
+    // runway size (per design request — water is a tiny refresher
+    // bottle among the bigger alcohol).
     type BottleKind =
       | 'champagne'
       | 'magnum'
       | 'methuselah'
       | 'vodkaBottle'
-      | 'vodkaMini';
+      | 'vodkaMini'
+      | 'water';
+    const bottleScales: Record<BottleKind, number> = {
+      champagne: 0.55,
+      magnum: 0.50,
+      methuselah: 0.55, // hero single-bottle case
+      vodkaBottle: 0.55,
+      vodkaMini: 0.85,  // shot glasses are small — keep readable
+      water: 0.20,      // 80% smaller than runway, per design ask
+    };
     const pickBottles = (seed: number): BottleKind[] => {
       const rng = mulberry32(seed);
-      // 15% chance the bucket holds a single methuselah (huge
+      // 12% chance the bucket holds a single methuselah (huge
       // bottle takes the whole bucket).
-      if (rng() < 0.15) return ['methuselah'];
+      if (rng() < 0.12) return ['methuselah'];
       // Otherwise 2–4 smaller bottles in random combination.
       const count = 2 + Math.floor(rng() * 3); // 2, 3, or 4
+      // Weighted pool — champagne dominates, vodka common, water
+      // rare so it reads as an accent rather than a frequent prop.
       const pool: BottleKind[] = [
+        'champagne',
         'champagne',
         'champagne',
         'magnum',
         'vodkaBottle',
         'vodkaBottle',
         'vodkaMini',
+        'water',
       ];
       const out: BottleKind[] = [];
       for (let i = 0; i < count; i++) {
@@ -2002,21 +1917,13 @@ export class RunnerGame {
     };
 
     const makeBottle = (kind: BottleKind): THREE.Group => {
-      switch (kind) {
-        case 'champagne':
-          return buildChampagneLike(1.0, 1.0);
-        case 'magnum':
-          return buildChampagneLike(1.25, 1.15);
-        case 'methuselah':
-          return buildChampagneLike(1.85, 1.45);
-        case 'vodkaBottle':
-          return buildVodkaBottleLike();
-        case 'vodkaMini':
-          return buildVodkaMiniLike();
-      }
+      const spec = PICKUPS[kind];
+      return this.buildPickupVisual(spec, bottleScales[kind]);
     };
 
     // ── Booth geometry — shared dims across all instances ───
+    // Tables 20% larger than the original 1.2 × 1.0 × 0.4 m design;
+    // buckets 50% larger than the original 0.22 × 0.26 m design.
     const SOFA_W = 4.4;              // length along Z
     const SOFA_BACK_H = 1.2;
     const SOFA_BACK_DEPTH = 0.3;     // thickness perpendicular to wall
@@ -2025,11 +1932,11 @@ export class RunnerGame {
     const SOFA_SIDE_DEPTH = 1.0;
     const SOFA_SIDE_H = 0.7;
     const SOFA_SIDE_W = 0.3;         // along Z
-    const TABLE_W = 1.2;             // along Z
-    const TABLE_DEPTH = 1.0;         // perpendicular to wall
-    const TABLE_H = 0.4;
-    const BUCKET_R = 0.22;
-    const BUCKET_H = 0.26;
+    const TABLE_W = 1.2 * 1.2;       // along Z (1.44 m)
+    const TABLE_DEPTH = 1.0 * 1.2;   // perpendicular to wall (1.20 m)
+    const TABLE_H = 0.4 * 1.2;       // (0.48 m)
+    const BUCKET_R = 0.22 * 1.5;     // (0.33 m)
+    const BUCKET_H = 0.26 * 1.5;     // (0.39 m)
 
     // Pre-built shared geometries — one allocation, all booths
     // share to keep draw-state simple.
@@ -4058,12 +3965,22 @@ export class RunnerGame {
     return 1.0;
   }
 
-  private spawnPickup() {
-    const spec = this.rollAdjustedPickup();
-    // Build the pickup as a Group, parented under an invisible
-    // cylinder collider so collision / scrolling / pickup-flash
-    // logic still treats it as a single object.
+  /**
+   * Build the visible bottle/glass mesh for a pickup spec. Returns
+   * a Group whose origin is at the bottle's BASE (y=0 inside the
+   * group), so callers can position the group's `y` directly to
+   * where the bottle should sit. No collider, no world placement —
+   * pure geometry.
+   *
+   * `scale` uniformly multiplies the spec's radius + height. Used
+   * by the runway pickup spawner at scale=1, and by the VIP booth
+   * builder at smaller scales so the same bottle silhouettes
+   * appear in both contexts without geometry duplication.
+   */
+  private buildPickupVisual(spec: PickupSpec, scale = 1): THREE.Group {
     const group = new THREE.Group();
+    const r = spec.radius * scale;
+    const h = spec.height * scale;
     const isChampagne =
       spec.kind === 'champagne' ||
       spec.kind === 'magnum' ||
@@ -4112,15 +4029,15 @@ export class RunnerGame {
         metalness: 0.40,
       });
 
-      const bodyH = spec.height * 0.52;
-      const shoulderH = spec.height * 0.14;
-      const neckH = spec.height * 0.28;
+      const bodyH = h * 0.52;
+      const shoulderH = h * 0.14;
+      const neckH = h * 0.28;
       const foilH = neckH * 0.55;
-      const corkH = spec.height * 0.06;
-      const neckR = spec.radius * 0.32;
+      const corkH = h * 0.06;
+      const neckR = r * 0.32;
 
       const body = new THREE.Mesh(
-        new THREE.CylinderGeometry(spec.radius * 0.96, spec.radius, bodyH, 18),
+        new THREE.CylinderGeometry(r * 0.96, r, bodyH, 18),
         glassMat,
       );
       body.position.y = bodyH / 2;
@@ -4152,7 +4069,7 @@ export class RunnerGame {
       // Width ≈ 1.4 × body radius keeps the badge inside the bottle's
       // silhouette from the front. Height is wider × the canvas
       // aspect ratio (320/256 = 1.25).
-      const labelWidth = spec.radius * 1.4;
+      const labelWidth = r * 1.4;
       const labelHeight = labelWidth * 1.25;
       label.scale.set(labelWidth, labelHeight, 1);
       // Sit slightly in FRONT of the bottle (+Z, the camera-facing
@@ -4160,12 +4077,12 @@ export class RunnerGame {
       // depth-fighting through the cylinder wall. The bottle no
       // longer rotates per-frame so this position stays on the
       // front face for the whole approach.
-      label.position.set(0, bodyH * 0.5, spec.radius + 0.02);
+      label.position.set(0, bodyH * 0.5, r + 0.02);
       group.add(label);
 
       // Shoulder — sharp taper from body radius down to neck radius.
       const shoulder = new THREE.Mesh(
-        new THREE.CylinderGeometry(neckR, spec.radius * 0.96, shoulderH, 18),
+        new THREE.CylinderGeometry(neckR, r * 0.96, shoulderH, 18),
         glassMat,
       );
       shoulder.position.y = bodyH + shoulderH / 2;
@@ -4225,9 +4142,9 @@ export class RunnerGame {
         // Shot glass: slightly tapered (top wider than base). Real
         // shot glasses are roughly 1:1 ratio; ours is a touch taller
         // than wide so it still reads as a glass + liquid sandwich.
-        const rTop = spec.radius * 1.05;
-        const rBottom = spec.radius * 0.78;
-        const glassH = spec.height;
+        const rTop = r * 1.05;
+        const rBottom = r * 0.78;
+        const glassH = h;
         const glass = new THREE.Mesh(
           new THREE.CylinderGeometry(rTop, rBottom, glassH, 16),
           glassMat,
@@ -4260,22 +4177,22 @@ export class RunnerGame {
           roughness: 0.35,
           metalness: 0.75,
         });
-        const bodyH = spec.height * 0.62;
-        const shoulderH = spec.height * 0.05;
-        const neckH = spec.height * 0.22;
-        const capH = spec.height * 0.11;
-        const neckR = spec.radius * 0.36;
+        const bodyH = h * 0.62;
+        const shoulderH = h * 0.05;
+        const neckH = h * 0.22;
+        const capH = h * 0.11;
+        const neckR = r * 0.36;
 
         // Body — no taper.
         const body = new THREE.Mesh(
-          new THREE.CylinderGeometry(spec.radius, spec.radius, bodyH, 16),
+          new THREE.CylinderGeometry(r, r, bodyH, 16),
           bodyMat,
         );
         body.position.y = bodyH / 2;
         group.add(body);
         // Sharp shoulder — short, almost-angular taper.
         const shoulder = new THREE.Mesh(
-          new THREE.CylinderGeometry(neckR, spec.radius, shoulderH, 16),
+          new THREE.CylinderGeometry(neckR, r, shoulderH, 16),
           bodyMat,
         );
         shoulder.position.y = bodyH + shoulderH / 2;
@@ -4303,31 +4220,31 @@ export class RunnerGame {
           roughness: 0.4,
           metalness: 0.30,
         });
-        const bottomH = spec.height * 0.30;
-        const topH = spec.height * 0.32;
-        const shoulderH = spec.height * 0.10;
-        const neckH = spec.height * 0.10;
-        const capBaseH = spec.height * 0.10;
-        const capDomeH = spec.height * 0.08;
-        const neckR = spec.radius * 0.42;
+        const bottomH = h * 0.30;
+        const topH = h * 0.32;
+        const shoulderH = h * 0.10;
+        const neckH = h * 0.10;
+        const capBaseH = h * 0.10;
+        const capDomeH = h * 0.08;
+        const neckR = r * 0.42;
 
         // Lower body — slight inward taper at the base.
         const bottom = new THREE.Mesh(
-          new THREE.CylinderGeometry(spec.radius, spec.radius * 0.85, bottomH, 16),
+          new THREE.CylinderGeometry(r, r * 0.85, bottomH, 16),
           bodyMat,
         );
         bottom.position.y = bottomH / 2;
         group.add(bottom);
         // Upper body — slight outward taper for the curvy silhouette.
         const top = new THREE.Mesh(
-          new THREE.CylinderGeometry(spec.radius * 0.95, spec.radius, topH, 16),
+          new THREE.CylinderGeometry(r * 0.95, r, topH, 16),
           bodyMat,
         );
         top.position.y = bottomH + topH / 2;
         group.add(top);
         // Smooth shoulder — generous taper down to a wider neck.
         const shoulder = new THREE.Mesh(
-          new THREE.CylinderGeometry(neckR, spec.radius * 0.95, shoulderH, 16),
+          new THREE.CylinderGeometry(neckR, r * 0.95, shoulderH, 16),
           bodyMat,
         );
         shoulder.position.y = bottomH + topH + shoulderH / 2;
@@ -4371,8 +4288,8 @@ export class RunnerGame {
     // can read the bottle silhouette.
     if (spec.kind === 'methuselah') {
       const ringGeo = new THREE.TorusGeometry(
-        spec.radius * 1.55,
-        spec.radius * 0.07,
+        r * 1.55,
+        r * 0.07,
         12,
         24,
       );
@@ -4383,9 +4300,16 @@ export class RunnerGame {
       });
       const ring = new THREE.Mesh(ringGeo, ringMat);
       ring.rotation.x = Math.PI / 2;
-      ring.position.y = spec.height * 0.4;
+      ring.position.y = h * 0.4;
       group.add(ring);
     }
+
+    return group;
+  }
+
+  private spawnPickup() {
+    const spec = this.rollAdjustedPickup();
+    const group = this.buildPickupVisual(spec);
 
     // ── Collider mesh (invisible — Group can't carry geometry for
     // intersectsPlayer's BoxGeometry / CylinderGeometry inspection).
