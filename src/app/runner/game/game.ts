@@ -5546,7 +5546,27 @@ export class RunnerGame {
       this.hud.flashPickup(spec, 0);
       this.audio.play('water');
     } else {
-      // Combo bump + score with multiplier.
+      // Apply buzz FIRST so we know whether this bottle kills the
+      // player. If it does, we skip the score / combo / bottle-
+      // count crediting entirely — a killing bottle shouldn't
+      // count toward the run (was a bug before: score + combo were
+      // baked in BEFORE the buzz check, so the last bottle on the
+      // way to a blackout still added points and bumped the combo).
+      const blackedOut = this.buzz.add(spec.buzzDelta);
+      if (blackedOut) {
+        // Hide the mesh so the player sees they DID grab the
+        // bottle (no "dropped through floor" weirdness), play the
+        // pickup ding so the audio still confirms the take, but
+        // commit no score / combo / bottlesCollected bookkeeping.
+        // The blackout death animation provides the gameplay
+        // feedback — no flashPickup needed (would read as "+0").
+        p.mesh.visible = false;
+        this.audio.play('pickup');
+        this.endGame('blackout');
+        return;
+      }
+
+      // Survived the take — credit it normally.
       const prevMult = this.getComboMultiplier(this.combo);
       this.combo++;
       this.peakCombo = Math.max(this.peakCombo, this.combo);
@@ -5565,17 +5585,6 @@ export class RunnerGame {
         this.audio.play('combo');
       } else {
         this.audio.play('pickup');
-      }
-      // Last — apply the buzz delta. If we were already at max, this
-      // is the bottle that tips us over → blackout.
-      const blackedOut = this.buzz.add(spec.buzzDelta);
-      // Hide the mesh before ending so the player at least sees
-      // they DID grab the bottle that killed them (vs feeling like
-      // it was lost / dropped through the floor).
-      p.mesh.visible = false;
-      if (blackedOut) {
-        this.endGame('blackout');
-        return;
       }
     }
     // Hide the mesh immediately on collection so the player feels
