@@ -259,6 +259,39 @@ export class RunnerGame {
    *  side walls. Scrolled in lockstep with the rest of the
    *  side-of-runway scenery. */
   private vipBooths: THREE.Group[] = [];
+  /** Wall-mounted speaker cabinets above the portraits, scrolling
+   *  with the rest of the wall scenery. Spacing admin-tunable via
+   *  `worldWallSpeakerSpacingZ`; spacing ≤ 0 disables them. */
+  private wallSpeakers: THREE.Group[] = [];
+  /** Wall-mounted strobe lights between speakers — emissive panels
+   *  whose intensity is animated per-frame for a club-strobe pulse.
+   *  Spacing admin-tunable via `worldWallStrobeSpacingZ`; ≤ 0
+   *  disables them. */
+  private wallStrobes: Array<{
+    group: THREE.Group;
+    material: THREE.MeshBasicMaterial;
+    phase: number;
+  }> = [];
+  /**
+   * Admin-tunable spacings for the four world-scenery pools. All
+   * default to the historical hard-coded values so an unseeded
+   * `games/runner` doc plays identically to the original release.
+   * Read once via `init()` from the corresponding `world*SpacingZ`
+   * setting; the pool is built lazily on first init via
+   * `applyWorldDecorations()` so spacings apply on the very first
+   * play, not the second.
+   */
+  private worldDancerSpacingZ = 9;
+  private worldBoothSpacingZ = 22.5;
+  private worldPortraitSpacingZ = 9;
+  private worldWallSpeakerSpacingZ = 18;
+  private worldWallStrobeSpacingZ = 12;
+  /** Latch: world decorations (portraits, booths, podiums, speakers,
+   *  strobes) are built on first `init()` AFTER settings arrive so
+   *  the admin's spacing overrides take effect immediately. Flip
+   *  true after the first apply so subsequent init() ticks don't
+   *  rebuild (which would duplicate meshes + leak GPU memory). */
+  private decorationsApplied = false;
   /**
    * Velvet-rope stanchion pool. Each entry is a Group containing
    * a gold post + base + cap + a red rope tube that visually
@@ -693,15 +726,12 @@ export class RunnerGame {
     rightWall.rotation.y = -Math.PI / 2;
     this.scene.add(rightWall);
 
-    // Mount procedurally-painted framed portraits along both walls.
-    // Static + scrolls past via parallax of the floor and other
-    // scenery — the player sees framed faces flashing by at speed.
-    this.buildWallArt(WALL_X);
-
-    // VIP booths — sofa + gold table + glowing bucket of bottles,
-    // tucked against the wall behind the portraits. Scrolled with
-    // the rest of the scenery.
-    this.buildVIPBooths(WALL_X);
+    // Wall portraits, VIP booths, dancer podiums, wall speakers, and
+    // wall strobes are DEFERRED to `applyWorldDecorations()`. That
+    // method is called from `init()` once the admin's spacing
+    // overrides have been applied, so the first play already
+    // honours their tuning. (Building here with default spacings
+    // would mean spacings only kick in on the second play.)
 
     // Lane separators — vertical white strips between lanes.
     const laneStripeGeo = new THREE.PlaneGeometry(0.06, 200);
@@ -760,14 +790,7 @@ export class RunnerGame {
     // the sign pops in once it lands (fire-and-forget).
     void this.buildHorizonSign();
 
-    // ── TAPE dancer podiums ────────────────────────────────────
-    // Tall slim columns with vertical red LED edge strips, mounted
-    // just past the rope on alternating sides. Pure Tape London
-    // iconography — these are the famous light-edged podiums the
-    // venue is known for. Pulse intensity is animated in the
-    // update loop so the row of podiums creates a travelling
-    // wave of brightness along the runway.
-    this.buildDancerPodiums();
+    // TAPE dancer podiums (also deferred — see applyWorldDecorations).
 
     // ── Player ──────────────────────────────────────────────────
     // Invisible collider sized to the original PLAYER.* dimensions
@@ -1581,20 +1604,29 @@ export class RunnerGame {
     tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
     tex.needsUpdate = true;
 
-    // Much larger sign + closer position. The previous z = -180
-    // with a 14 m sign was angularly ~4° wide on a 1080p screen
-    // — visible but easy to miss. 30 m wide × 7.5 m tall at
-    // z = -120 reads as a proper marquee — clearly the focal
-    // point at the end of the runway without dominating the
-    // play area.
-    const SIGN_W = 30;
-    const SIGN_H = SIGN_W * (PIXEL_H / PIXEL_W); // ~9.4 m
+    // The sign reads as a marquee at the end of the runway. It
+    // also needs to be visible through the scene's FogExp2 (density
+    // 0.020) — at z = -120 the fog factor is exp(-(0.020*120)²) ≈
+    // 0.003, i.e. 99.7% fogged out. Two-part fix:
+    //   1. fog: false on the material — the sign renders at full
+    //      opacity regardless of distance, so the user can pick a
+    //      distance based purely on composition.
+    //   2. Move closer to z = -50 (was -120) so the sign reads
+    //      clearly without needing players to squint into the haze.
+    //
+    // Size kept at 20 m × ~6.3 m — narrower than the old 30 m wide
+    // value because at z = -50 (vs the old -120) the angular size
+    // would otherwise be 2.4× larger and dominate the play area.
+    // User asked us to start closer and they'll iterate from there.
+    const SIGN_W = 20;
+    const SIGN_H = SIGN_W * (PIXEL_H / PIXEL_W); // ~6.3 m
     const geo = new THREE.PlaneGeometry(SIGN_W, SIGN_H);
     const mat = new THREE.MeshBasicMaterial({
       map: tex,
       transparent: true,
       depthWrite: false,
       toneMapped: false,
+      fog: false,
     });
 
     const sign = new THREE.Mesh(geo, mat);
@@ -1602,7 +1634,7 @@ export class RunnerGame {
     // overhead signage. y = 6.5 sits just below the LED ceiling
     // at y = 8.5 — comfortably in the camera's view, doesn't
     // collide with the dancer podiums.
-    sign.position.set(0, 6.5, -120);
+    sign.position.set(0, 6.5, -50);
     this.scene.add(sign);
   }
 
@@ -1761,14 +1793,18 @@ export class RunnerGame {
 
     const PORTRAIT_SIZE = 2.016;     // 2.016 × 2.016 m (44% over base — two 20% bumps)
     const PORTRAIT_Y = 3.5;           // mid-height on the wall (0.5 m below original eye-level)
-    const PORTRAIT_SPACING_Z = 9;    // one per 9 m — matches podium rhythm
-    // Pool 10 portraits per wall in the −9 m to −90 m range and
-    // wrap with the standard POOL_LENGTH = 90 m used by floor
-    // stripes / podiums / ropes. As each portrait scrolls past z = 4
-    // (a few metres behind the camera) it pops back 90 m down the
-    // runway and reappears in the distance — endless wall art with
-    // a small recycled pool.
-    const NUM_PER_WALL = 10;
+    // Pool length stays 90 m to match the rest of the wall scenery's
+    // wrap distance. Admin-tunable spacing controls how DENSE the
+    // portraits are within that 90 m — smaller value = more
+    // frequent. Spacing of 0 or less disables the pool entirely.
+    const PORTRAIT_SPACING_Z = Math.max(0.5, this.worldPortraitSpacingZ);
+    // Pool covers the 90 m wrap range; count derives from the
+    // spacing so admin tuning naturally changes density without
+    // breaking the wrap math. (Was hard-coded NUM_PER_WALL = 10 at
+    // 9 m spacing = 90 m, which is what the default still yields.)
+    const POOL_LENGTH_PORTRAITS = 90;
+    const NUM_PER_WALL =
+        Math.max(1, Math.floor(POOL_LENGTH_PORTRAITS / PORTRAIT_SPACING_Z));
 
     const portraitGeo = new THREE.PlaneGeometry(PORTRAIT_SIZE, PORTRAIT_SIZE);
     const pickTex = (i: number) => textures[i % textures.length];
@@ -1816,9 +1852,13 @@ export class RunnerGame {
    * size) plus the occasional tiny water bottle as a decorative prop.
    */
   private buildVIPBooths(wallX: number) {
-    // Layout constants
-    const NUM_PER_WALL = 4;
-    const BOOTH_SPACING_Z = 22.5;  // 4 × 22.5 = 90 m → perfect wrap
+    // Layout constants. Pool wraps at 90 m to match the other wall
+    // scenery; booth count derives from the admin spacing so a
+    // smaller value packs more booths into the same 90 m window.
+    const BOOTH_SPACING_Z = Math.max(2.0, this.worldBoothSpacingZ);
+    const POOL_LENGTH_BOOTHS = 90;
+    const NUM_PER_WALL =
+        Math.max(1, Math.floor(POOL_LENGTH_BOOTHS / BOOTH_SPACING_Z));
     const BOOTH_OFFSET_Z = -11;    // first booth's centre Z
 
     // Shared materials — black sofa, gold table, black bucket
@@ -2341,9 +2381,210 @@ export class RunnerGame {
    * Pool size mirrors the velvet rope wavelength (90 m) so the
    * two systems recycle in lockstep.
    */
+
+  /**
+   * Build (or rebuild) every world-decoration pool whose density is
+   * admin-tunable: wall portraits, VIP booths, dancer podiums, wall
+   * speakers, wall strobes. Called once from `init()` after the
+   * admin's `world*SpacingZ` overrides have been applied, so the
+   * first play already uses the correct spacings.
+   *
+   * Idempotent — guarded by `decorationsApplied` so duplicate
+   * init() calls don't pile up extra meshes. A future "live
+   * re-spawn on slider change" path would clear the existing pools
+   * + reset the flag before calling here again.
+   */
+  private applyWorldDecorations() {
+    if (this.decorationsApplied) return;
+    const WALL_X = 10;
+    this.buildWallArt(WALL_X);
+    this.buildVIPBooths(WALL_X);
+    this.buildDancerPodiums();
+    this.buildWallSpeakers(WALL_X);
+    this.buildWallStrobes(WALL_X);
+    this.decorationsApplied = true;
+  }
+
+  /**
+   * Wall-mounted speaker cabinets above the portraits — a row of
+   * dark boxes with a circular grille on the front face, scrolling
+   * in lockstep with the rest of the wall scenery (90 m wrap).
+   *
+   * Each speaker is a thin slab (depth 0.25 m) hugging the wall,
+   * mounted just above the portraits at y ≈ 5.2 m. Admin-tunable
+   * spacing controls density; spacing of 0 or less disables the
+   * pool entirely (no speakers built).
+   */
+  private buildWallSpeakers(wallX: number) {
+    const SPACING = this.worldWallSpeakerSpacingZ;
+    if (!(SPACING > 0)) return; // 0 / negative = disabled
+    const SPEAKER_SPACING_Z = Math.max(1.5, SPACING);
+    const POOL_LENGTH = 90;
+    const NUM_PER_WALL =
+        Math.max(1, Math.floor(POOL_LENGTH / SPEAKER_SPACING_Z));
+    // Speaker dimensions — chosen to read clearly from across the
+    // runway but sit comfortably above the 2 m × 2 m portraits
+    // (PORTRAIT_Y = 3.5, top edge ≈ 4.5). Centre at y = 5.5 → top
+    // ≈ 6.05, leaving ~0.5 m clearance above for strobes.
+    const SPEAKER_W = 1.0;
+    const SPEAKER_H = 1.1;
+    const SPEAKER_D = 0.25;
+    const SPEAKER_Y = 5.5;
+    // Cone radius — front-face grille that reads as "speaker".
+    const CONE_R = SPEAKER_W * 0.32;
+
+    // Shared materials/geometries — one alloc, all instances share.
+    const cabinetMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a0c,
+      roughness: 0.85,
+      metalness: 0.10,
+    });
+    const grilleMat = new THREE.MeshStandardMaterial({
+      color: 0x18181c,
+      roughness: 0.40,
+      metalness: 0.55,
+    });
+    const coneMat = new THREE.MeshStandardMaterial({
+      color: 0x2c2c30,
+      roughness: 0.45,
+      metalness: 0.35,
+    });
+    const cabinetGeo = new THREE.BoxGeometry(SPEAKER_D, SPEAKER_H, SPEAKER_W);
+    const grilleGeo = new THREE.PlaneGeometry(SPEAKER_W * 0.92, SPEAKER_H * 0.92);
+    const coneGeo = new THREE.CircleGeometry(CONE_R, 18);
+    const tweeterGeo = new THREE.CircleGeometry(CONE_R * 0.42, 14);
+
+    for (let side = 0; side < 2; side++) {
+      const sideSign = side === 0 ? -1 : 1;
+      const sideX = sideSign * wallX;
+      // Front face (the grille side) faces toward the runway centre.
+      // For the LEFT wall (sideSign = -1), the runway is at +X, so
+      // the grille is at slightly LESS NEGATIVE X (inward).
+      const grilleOffsetX = -sideSign * (SPEAKER_D / 2 + 0.005);
+      // Cabinet sits with its outer face flush to the wall (slightly
+      // inset so it doesn't z-fight).
+      const cabinetOffsetX = -sideSign * (SPEAKER_D / 2 - 0.01);
+      // Grille rotation: rotate the plane to face inward.
+      const grilleRotY = sideSign === -1 ? Math.PI / 2 : -Math.PI / 2;
+      // Offset the row so it interleaves between portraits — half a
+      // portrait spacing offset means the speakers sit BETWEEN
+      // portraits, not directly above them. Reads cleaner.
+      const portraitOffsetZ = -this.worldPortraitSpacingZ * 0.5;
+      for (let i = 0; i < NUM_PER_WALL; i++) {
+        const z = portraitOffsetZ - i * SPEAKER_SPACING_Z;
+        const unit = new THREE.Group();
+
+        // Cabinet box hugging the wall.
+        const cabinet = new THREE.Mesh(cabinetGeo, cabinetMat);
+        cabinet.position.set(cabinetOffsetX, 0, 0);
+        unit.add(cabinet);
+
+        // Grille panel — slightly inside the cabinet front face.
+        const grille = new THREE.Mesh(grilleGeo, grilleMat);
+        grille.position.set(grilleOffsetX, 0, 0);
+        grille.rotation.y = grilleRotY;
+        unit.add(grille);
+
+        // Two stacked driver cones (woofer + tweeter) so the
+        // silhouette reads as a 2-way cabinet from distance.
+        const woofer = new THREE.Mesh(coneGeo, coneMat);
+        woofer.position.set(
+            grilleOffsetX - sideSign * 0.001, -SPEAKER_H * 0.15, 0);
+        woofer.rotation.y = grilleRotY;
+        unit.add(woofer);
+        const tweeter = new THREE.Mesh(tweeterGeo, coneMat);
+        tweeter.position.set(
+            grilleOffsetX - sideSign * 0.001, SPEAKER_H * 0.30, 0);
+        tweeter.rotation.y = grilleRotY;
+        unit.add(tweeter);
+
+        unit.position.set(sideX, SPEAKER_Y, z);
+        this.scene.add(unit);
+        this.wallSpeakers.push(unit);
+      }
+    }
+  }
+
+  /**
+   * Wall-mounted strobe lights interleaved with the speakers — a
+   * row of small emissive panels whose brightness is animated in
+   * the update loop for the classic club-strobe pulse. Each strobe
+   * has a per-instance phase offset so the row doesn't blink in
+   * unison (which looks like a bug rather than a strobe pattern).
+   *
+   * Spacing of 0 or less disables the pool entirely.
+   */
+  private buildWallStrobes(wallX: number) {
+    const SPACING = this.worldWallStrobeSpacingZ;
+    if (!(SPACING > 0)) return;
+    const STROBE_SPACING_Z = Math.max(1.0, SPACING);
+    const POOL_LENGTH = 90;
+    const NUM_PER_WALL =
+        Math.max(1, Math.floor(POOL_LENGTH / STROBE_SPACING_Z));
+    const STROBE_W = 0.40;
+    const STROBE_H = 0.18;
+    const STROBE_D = 0.10;
+    // Sit ABOVE the speakers (which are centred at y = 5.5, top
+    // edge ≈ 6.05). y = 6.6 gives a clean 0.55 m gap.
+    const STROBE_Y = 6.6;
+
+    const cabinetMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a0c,
+      roughness: 0.70,
+      metalness: 0.20,
+    });
+    const cabinetGeo = new THREE.BoxGeometry(STROBE_D, STROBE_H, STROBE_W);
+    const panelGeo = new THREE.PlaneGeometry(STROBE_W * 0.85, STROBE_H * 0.7);
+
+    for (let side = 0; side < 2; side++) {
+      const sideSign = side === 0 ? -1 : 1;
+      const sideX = sideSign * wallX;
+      const panelOffsetX = -sideSign * (STROBE_D / 2 + 0.005);
+      const cabinetOffsetX = -sideSign * (STROBE_D / 2 - 0.01);
+      const panelRotY = sideSign === -1 ? Math.PI / 2 : -Math.PI / 2;
+      for (let i = 0; i < NUM_PER_WALL; i++) {
+        const z = -i * STROBE_SPACING_Z;
+        const unit = new THREE.Group();
+
+        // Cabinet — small dark box on the wall.
+        const cabinet = new THREE.Mesh(cabinetGeo, cabinetMat);
+        cabinet.position.set(cabinetOffsetX, 0, 0);
+        unit.add(cabinet);
+
+        // Emissive front panel — unique material per strobe so we
+        // can animate each one's emissive intensity independently
+        // for the staggered flash pattern.
+        const panelMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          toneMapped: false,
+        });
+        const panel = new THREE.Mesh(panelGeo, panelMat);
+        panel.position.set(panelOffsetX, 0, 0);
+        panel.rotation.y = panelRotY;
+        unit.add(panel);
+
+        unit.position.set(sideX, STROBE_Y, z);
+        this.scene.add(unit);
+        // Per-instance phase: derive from index + side so the two
+        // walls don't blink in mirror lockstep. The +0.5 offset for
+        // side=1 gives 180° out-of-phase between the two walls.
+        const phase = (i / NUM_PER_WALL) * Math.PI * 2 + side * Math.PI;
+        this.wallStrobes.push({ group: unit, material: panelMat, phase });
+      }
+    }
+  }
+
   private buildDancerPodiums() {
     const POOL_LENGTH = 90;        // matches floor-stripe / rope wavelength
-    const SPACING_Z = 9;           // podium every 9 m of track (alternating sides)
+    // Spacing admin-tunable via worldDancerSpacingZ. Default 9 m
+    // (10 podiums spread across the 90 m wrap). Smaller value =
+    // more podiums; larger = fewer. Floored at 2 m so they don't
+    // overlap.
+    const SPACING_Z = Math.max(2.0, this.worldDancerSpacingZ);
     const SIDE_X = 5.25;           // 1.5 m past the rope at X = ±3.75
     // ── Plinth dimensions ────────────────────────────────────
     const PLINTH_W = 1.3;          // square footprint, slightly wider than the cage
@@ -3574,6 +3815,27 @@ export class RunnerGame {
     for (const b of this.vipBooths) {
       b.position.z += scroll;
       if (b.position.z > 4) b.position.z -= 90;
+    }
+    // ── Scroll wall speakers (same 90 m wavelength)
+    for (const s of this.wallSpeakers) {
+      s.position.z += scroll;
+      if (s.position.z > 4) s.position.z -= 90;
+    }
+    // ── Scroll wall strobes (same 90 m wavelength) + per-frame
+    // pulse: each strobe modulates its emissive panel opacity on a
+    // sin-wave keyed to (gameTime + phase). The ABS converts the
+    // sine into a sawtooth-like pulse (0 → 1 → 0 over each half
+    // wavelength), and POWER concentrates the on-time so most of
+    // the cycle is dark with a brief bright flash — the classic
+    // club strobe feel rather than a smooth pulse.
+    for (const s of this.wallStrobes) {
+      s.group.position.z += scroll;
+      if (s.group.position.z > 4) s.group.position.z -= 90;
+      // Frequency ~ 2.5 Hz total cycle (2 * 2.5 = 5 flashes/sec when
+      // squared). Tweak the multiplier for faster/slower if needed.
+      const t = this.duration * 5.0 + s.phase;
+      const pulse = Math.pow(Math.max(0, Math.sin(t)), 8.0);
+      s.material.opacity = pulse;
     }
 
     // ── Animate club lights + dancer podium LED pulse + dance loops
@@ -5281,6 +5543,33 @@ export class RunnerGame {
         }
       }
 
+      // ── World decoration densities ─────────────────────────
+      // Admin sliders on /runnerAdmin → Tuning → World. The five
+      // pools (dancers, booths, portraits, wall speakers, wall
+      // strobes) all share the same 90 m wrap; the spacing
+      // controls how many units fit into that wrap. Negative or
+      // zero spacing on a NEW pool (speakers, strobes) disables
+      // that pool entirely. The two original pools (booths,
+      // portraits) and the dancer podium pool clamp to a tiny
+      // floor so an admin can never accidentally produce zero
+      // entries — those have always rendered and removing them
+      // by setting spacing = 0 would be a footgun.
+      if (typeof s.worldDancerSpacingZ === 'number' && s.worldDancerSpacingZ > 0) {
+        this.worldDancerSpacingZ = s.worldDancerSpacingZ;
+      }
+      if (typeof s.worldBoothSpacingZ === 'number' && s.worldBoothSpacingZ > 0) {
+        this.worldBoothSpacingZ = s.worldBoothSpacingZ;
+      }
+      if (typeof s.worldPortraitSpacingZ === 'number' && s.worldPortraitSpacingZ > 0) {
+        this.worldPortraitSpacingZ = s.worldPortraitSpacingZ;
+      }
+      if (typeof s.worldWallSpeakerSpacingZ === 'number') {
+        this.worldWallSpeakerSpacingZ = s.worldWallSpeakerSpacingZ;
+      }
+      if (typeof s.worldWallStrobeSpacingZ === 'number') {
+        this.worldWallStrobeSpacingZ = s.worldWallStrobeSpacingZ;
+      }
+
       // ── Spawn pacing ────────────────────────────────────────
       // Clamp to a sane floor (0.1s) so an admin who accidentally
       // sets the interval to 0 doesn't kick off an infinite spawn.
@@ -5429,6 +5718,12 @@ export class RunnerGame {
         `start=${this.startSpeed} max=${this.maxSpeed} ` +
         `ramp=${this.speedRamp}`,
     });
+
+    // Build the admin-tunable world decorations now that every
+    // `world*SpacingZ` field has been applied. Guarded inside the
+    // method so multiple `init()` ticks (page.tsx + Flutter) only
+    // produce one set of meshes.
+    this.applyWorldDecorations();
   }
 
   pause() {

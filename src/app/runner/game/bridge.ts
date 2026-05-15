@@ -109,6 +109,18 @@ export type InitPayload = {
     comboTier4Threshold?: number;
     /** @deprecated — see `comboTiers`. */
     comboTier4Multiplier?: number;
+    // ── World decoration density (Three.js only) ───────────────
+    // Metres between consecutive instances of each wall-scenery
+    // pool. Smaller values pack more units into the 90 m wrap
+    // window; larger values space them out. Each spacing of ≤ 0
+    // disables that pool entirely (no portraits / speakers /
+    // strobes etc). Speaker + strobe defaults of 18 / 12 mean the
+    // strobes interleave 1.5 strobes per speaker.
+    worldDancerSpacingZ?: number;
+    worldBoothSpacingZ?: number;
+    worldPortraitSpacingZ?: number;
+    worldWallSpeakerSpacingZ?: number;
+    worldWallStrobeSpacingZ?: number;
     // ── Player feel (Three.js only) ─────────────────────────────
     jumpVelocity?: number;
     laneChangeSeconds?: number;
