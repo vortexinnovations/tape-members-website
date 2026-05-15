@@ -680,6 +680,11 @@ export class RunnerGame {
     rightWall.rotation.y = -Math.PI / 2;
     this.scene.add(rightWall);
 
+    // Mount procedurally-painted framed portraits along both walls.
+    // Static + scrolls past via parallax of the floor and other
+    // scenery — the player sees framed faces flashing by at speed.
+    this.buildWallArt(WALL_X);
+
     // Lane separators — vertical white strips between lanes.
     const laneStripeGeo = new THREE.PlaneGeometry(0.06, 200);
     const laneStripeMat = new THREE.MeshBasicMaterial({
@@ -1581,6 +1586,189 @@ export class RunnerGame {
     // collide with the dancer podiums.
     sign.position.set(0, 6.5, -120);
     this.scene.add(sign);
+  }
+
+  /**
+   * Mount procedurally-painted framed portraits along both side
+   * walls. The player sees framed faces flash by at speed — no
+   * detail required, the abstract head silhouette + frame is
+   * enough to read as "art on the wall".
+   *
+   * Implementation: 6 distinct portrait CanvasTextures shared
+   * across all instances (so total texture memory stays small),
+   * each instance is a single plane with the texture mapped. The
+   * frame is painted directly into the canvas so no extra
+   * geometry per portrait.
+   */
+  private buildWallArt(wallX: number) {
+    // Per-portrait canvas resolution. Small enough that 6 of them
+    // fit comfortably in a few KB of texture memory; the player
+    // never sees them up close so anti-aliased detail is wasted.
+    const PIXEL = 256;
+
+    // Generate 6 distinct portrait textures with varying hair /
+    // skin / background palette. Drawn once, reused everywhere.
+    const palettes: Array<{
+      bg: string;
+      skin: string;
+      hair: string;
+      frame: string;
+      frameInner: string;
+    }> = [
+      // Warm sepia, brown hair
+      { bg: '#3a2418', skin: '#d6a98a', hair: '#1c0e08',
+        frame: '#1a1106', frameInner: '#6b4a22' },
+      // Cool blue, black hair
+      { bg: '#1a2230', skin: '#c79a7c', hair: '#0a0608',
+        frame: '#0c0f14', frameInner: '#374a66' },
+      // Olive green, blonde hair
+      { bg: '#2c2e1c', skin: '#e6c4a4', hair: '#a87826',
+        frame: '#1a1a10', frameInner: '#6a6028' },
+      // Burgundy red, dark hair
+      { bg: '#341820', skin: '#c08a72', hair: '#150808',
+        frame: '#180810', frameInner: '#7a3548' },
+      // Slate grey, red hair
+      { bg: '#2a2828', skin: '#d8a684', hair: '#9a3818',
+        frame: '#0e0e0e', frameInner: '#4a4848' },
+      // Deep purple, silver hair
+      { bg: '#2a1a32', skin: '#d2b094', hair: '#a8a8b4',
+        frame: '#100614', frameInner: '#6a4a82' },
+    ];
+
+    const textures = palettes.map((p) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = PIXEL;
+      canvas.height = PIXEL;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return new THREE.CanvasTexture(canvas);
+
+      // Frame — outer dark, inner highlight (gilded effect)
+      ctx.fillStyle = p.frame;
+      ctx.fillRect(0, 0, PIXEL, PIXEL);
+      ctx.fillStyle = p.frameInner;
+      ctx.fillRect(14, 14, PIXEL - 28, PIXEL - 28);
+      ctx.fillStyle = p.frame;
+      ctx.fillRect(22, 22, PIXEL - 44, PIXEL - 44);
+
+      // Portrait inset
+      const PAD = 28;
+      const innerW = PIXEL - 2 * PAD;
+      const innerH = PIXEL - 2 * PAD;
+
+      // Background panel of the portrait
+      ctx.fillStyle = p.bg;
+      ctx.fillRect(PAD, PAD, innerW, innerH);
+
+      // Head — oval, centred in upper-mid of the portrait
+      const headCX = PIXEL / 2;
+      const headCY = PAD + innerH * 0.55;
+      const headRX = innerW * 0.28;
+      const headRY = innerH * 0.34;
+      ctx.fillStyle = p.skin;
+      ctx.beginPath();
+      ctx.ellipse(headCX, headCY, headRX, headRY, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Hair — crescent over the top of the head
+      ctx.fillStyle = p.hair;
+      ctx.beginPath();
+      ctx.ellipse(
+        headCX,
+        headCY - headRY * 0.4,
+        headRX * 1.05,
+        headRY * 0.85,
+        0,
+        Math.PI,
+        Math.PI * 2,
+      );
+      ctx.fill();
+
+      // Body suggestion — shoulders / bust just below the head,
+      // matching skin tone to read as a "bust portrait" not a
+      // floating head.
+      ctx.fillStyle = p.skin;
+      ctx.beginPath();
+      ctx.ellipse(
+        headCX,
+        headCY + headRY * 1.5,
+        headRX * 1.6,
+        headRY * 0.9,
+        0,
+        Math.PI,
+        Math.PI * 2,
+      );
+      ctx.fill();
+
+      // Tiny facial features — at portrait-on-distant-wall scale
+      // these read as a face by suggestion. Eyes:
+      ctx.fillStyle = '#1a1010';
+      const eyeY = headCY - headRY * 0.05;
+      const eyeOffset = headRX * 0.4;
+      ctx.beginPath();
+      ctx.arc(headCX - eyeOffset, eyeY, headRX * 0.08, 0, Math.PI * 2);
+      ctx.arc(headCX + eyeOffset, eyeY, headRX * 0.08, 0, Math.PI * 2);
+      ctx.fill();
+      // Mouth — short line
+      ctx.fillRect(
+        headCX - headRX * 0.18,
+        headCY + headRY * 0.45,
+        headRX * 0.36,
+        headRX * 0.08,
+      );
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.needsUpdate = true;
+      return tex;
+    });
+
+    const PORTRAIT_SIZE = 1.4;       // 1.4 × 1.4 m
+    const PORTRAIT_Y = 4.0;          // centred eye-level on the runner
+    const PORTRAIT_SPACING_Z = 9;    // one per 9 m along the wall —
+                                     // matches podium spacing rhythm
+    const FIRST_Z = 0;               // first portrait near the camera
+    const LAST_Z = -180;             // last near the horizon sign
+    const numPortraits = Math.floor(
+      (FIRST_Z - LAST_Z) / PORTRAIT_SPACING_Z,
+    );
+
+    // Shared geometry across all portrait instances.
+    const portraitGeo = new THREE.PlaneGeometry(PORTRAIT_SIZE, PORTRAIT_SIZE);
+
+    // Deterministic-ish picker using z position as seed so the same
+    // index hits the same texture across sessions (avoids hydration
+    // jitter even though this is client-only code).
+    const pickTex = (i: number) => textures[i % textures.length];
+
+    for (let side = 0; side < 2; side++) {
+      const sideX = side === 0 ? -wallX : wallX;
+      // Faces inward toward the runway centre. Left wall (x < 0)
+      // points +X, right wall points -X.
+      const facingRotY = side === 0 ? Math.PI / 2 : -Math.PI / 2;
+
+      for (let i = 0; i < numPortraits; i++) {
+        const z = FIRST_Z - (i + 1) * PORTRAIT_SPACING_Z;
+        const tex = pickTex(i + side * 7); // offset the side index
+                                            // so a given Z doesn't
+                                            // mirror the same portrait
+                                            // on both walls
+        const mat = new THREE.MeshBasicMaterial({
+          map: tex,
+          toneMapped: false,
+          // No transparency — the portrait fills its plane.
+        });
+        const portrait = new THREE.Mesh(portraitGeo, mat);
+        portrait.position.set(
+          // Float the portrait 0.02 m off the wall so it doesn't
+          // z-fight with the wall surface.
+          sideX + (side === 0 ? 0.02 : -0.02),
+          PORTRAIT_Y,
+          z,
+        );
+        portrait.rotation.y = facingRotY;
+        this.scene.add(portrait);
+      }
+    }
   }
 
   private buildLEDCeiling() {
