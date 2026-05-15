@@ -124,6 +124,10 @@ export type InitPayload = {
     /** Metres between consecutive "ALL ROADS LEAD TO TAPE" floor-
      *  text bands. ≤ 0 disables the pool entirely. */
     worldFloorTextSpacingZ?: number;
+    /** Metres between consecutive pink-neon "Shots Bitch" signs
+     *  mounted on the side walls between booths and portraits.
+     *  ≤ 0 disables the pool entirely. */
+    worldWallShotsSpacingZ?: number;
     // ── Player feel (Three.js only) ─────────────────────────────
     jumpVelocity?: number;
     laneChangeSeconds?: number;

@@ -276,6 +276,11 @@ export class RunnerGame {
    *  runway. Pool wraps in the standard 90 m window. Spacing
    *  admin-tunable via `worldFloorTextSpacingZ`; ≤ 0 disables. */
   private floorTexts: THREE.Mesh[] = [];
+  /** Pink neon "Shots Bitch" signs mounted on the side walls,
+   *  between booth backrests and portraits. Pool wraps in the
+   *  standard 90 m window. Spacing admin-tunable via
+   *  `worldWallShotsSpacingZ`; ≤ 0 disables. */
+  private wallShots: THREE.Mesh[] = [];
   /**
    * Admin-tunable spacings for the four world-scenery pools. All
    * default to the historical hard-coded values so an unseeded
@@ -291,6 +296,7 @@ export class RunnerGame {
   private worldWallSpeakerSpacingZ = 18;
   private worldWallStrobeSpacingZ = 12;
   private worldFloorTextSpacingZ = 30;
+  private worldWallShotsSpacingZ = 24;
   /** Latch: world decorations (portraits, booths, podiums, speakers,
    *  strobes) are built on first `init()` AFTER settings arrive so
    *  the admin's spacing overrides take effect immediately. Flip
@@ -2419,6 +2425,7 @@ export class RunnerGame {
     this.buildDancerPodiums();
     this.buildWallSpeakers(WALL_X);
     this.buildWallStrobes(WALL_X);
+    this.buildWallShots(WALL_X);
     // Floor text is async (font fetch). Fire-and-forget — the
     // pool pops in once the FontFace resolves, same pattern the
     // legacy horizon sign used.
@@ -2595,6 +2602,128 @@ export class RunnerGame {
         // side=1 gives 180° out-of-phase between the two walls.
         const phase = (i / NUM_PER_WALL) * Math.PI * 2 + side * Math.PI;
         this.wallStrobes.push({ group: unit, material: panelMat, phase });
+      }
+    }
+  }
+
+  /**
+   * Pink-neon "Shots Bitch" cursive signs mounted on the side walls.
+   * Sits in the band between the booth backrest tops (~y=1.44) and
+   * the portrait bottoms (~y=2.49) — about chest height for a
+   * standing patron, where bar neons live in the real venue.
+   *
+   * The text is rendered onto a shared CanvasTexture (one texture,
+   * applied to N planes) with a 3-pass neon glow: outer magenta
+   * halo → mid hot-pink → bright pink core. Default browser
+   * 'cursive' family chain so the rendering picks the best
+   * available script font per platform — Snell Roundhand on iOS /
+   * macOS, Brush Script MT on Windows, system fallback otherwise.
+   * All readable; we sized the canvas + adaptive font loop large
+   * enough that any of those faces fit clean.
+   *
+   * Capitalisation preserved EXACTLY ("Shots Bitch", S+B uppercase,
+   * rest lowercase) per the spec — no toUpperCase shenanigans.
+   *
+   * Spacing admin-tunable via `worldWallShotsSpacingZ`; ≤ 0
+   * disables the pool entirely. Default 24 m = ~4 signs per wall
+   * in the 90 m wrap.
+   */
+  private buildWallShots(wallX: number) {
+    const SPACING = this.worldWallShotsSpacingZ;
+    if (!(SPACING > 0)) return;
+    const SHOTS_SPACING_Z = Math.max(2.0, SPACING);
+    const POOL_LENGTH = 90;
+    const NUM_PER_WALL =
+        Math.max(1, Math.floor(POOL_LENGTH / SHOTS_SPACING_Z));
+
+    // ── Build the shared neon texture ──────────────────────────
+    const PIXEL_W = 1280;
+    const PIXEL_H = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = PIXEL_W;
+    canvas.height = PIXEL_H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, PIXEL_W, PIXEL_H);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Adaptive font sizing — start large, shrink until the cursive
+    // text fits inside the 1280-px canvas with margin. Cursive
+    // metrics vary wildly between platforms (Snell is narrow,
+    // Brush Script is wide), so a loop is safer than a fixed value.
+    const TEXT = 'Shots Bitch';
+    const SIDE_MARGIN = 80;
+    const MAX_TEXT_W = PIXEL_W - 2 * SIDE_MARGIN;
+    // CSS font-family chain: prefer well-known readable cursive
+    // faces, fall back to the generic 'cursive' family which the
+    // browser maps to a sensible system script. `italic` requests
+    // italicised variants where the family has them — most cursive
+    // faces don't change much, but the request is harmless.
+    const FONT_FAMILY =
+        '"Brush Script MT", "Lucida Handwriting", "Snell Roundhand", "Apple Chancery", cursive';
+    let fontSize = 200;
+    ctx.font = `bold italic ${fontSize}px ${FONT_FAMILY}`;
+    while (ctx.measureText(TEXT).width > MAX_TEXT_W && fontSize > 50) {
+      fontSize -= 6;
+      ctx.font = `bold italic ${fontSize}px ${FONT_FAMILY}`;
+    }
+
+    // 3-pass neon glow — outer wide halo, mid halo, bright core.
+    // Each pass writes the text on top of the previous with a
+    // tighter shadow blur, so the result reads as a glowing tube.
+    ctx.shadowColor = '#ff00aa';
+    ctx.shadowBlur = 56;
+    ctx.fillStyle = '#ff44cc';
+    ctx.fillText(TEXT, PIXEL_W / 2, PIXEL_H / 2);
+    ctx.shadowBlur = 28;
+    ctx.fillStyle = '#ff88dd';
+    ctx.fillText(TEXT, PIXEL_W / 2, PIXEL_H / 2);
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = '#ffcfeb';
+    ctx.fillText(TEXT, PIXEL_W / 2, PIXEL_H / 2);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    tex.needsUpdate = true;
+
+    // ── Build the pool ─────────────────────────────────────────
+    const PLANE_W = 2.5;
+    const PLANE_H = 0.5;
+    const SIGN_Y = 2.0;
+    const planeGeo = new THREE.PlaneGeometry(PLANE_W, PLANE_H);
+    const planeMat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+      // Pink neon stays vivid regardless of distance — fog would
+      // wash it out long before the player got close.
+      fog: false,
+    });
+
+    for (let side = 0; side < 2; side++) {
+      const sideSign = side === 0 ? -1 : 1;
+      const sideX = sideSign * wallX;
+      // Inset 2 cm off the wall toward the runway centre so the
+      // neon plane composites cleanly without z-fighting with the
+      // wall geometry behind it.
+      const offsetX = -sideSign * 0.02;
+      // Plane default normal is +Z. Rotate ±π/2 on Y so the front
+      // face points inward toward the runway.
+      const rotY = sideSign === -1 ? Math.PI / 2 : -Math.PI / 2;
+      // Stagger the two walls by half a spacing so a player jogging
+      // down the centre sees signs alternate left/right, not pass
+      // in mirror lockstep.
+      const sideOffsetZ = side === 1 ? -SHOTS_SPACING_Z * 0.5 : 0;
+      for (let i = 0; i < NUM_PER_WALL; i++) {
+        const z = sideOffsetZ - i * SHOTS_SPACING_Z;
+        const mesh = new THREE.Mesh(planeGeo, planeMat);
+        mesh.position.set(sideX + offsetX, SIGN_Y, z);
+        mesh.rotation.y = rotY;
+        this.scene.add(mesh);
+        this.wallShots.push(mesh);
       }
     }
   }
@@ -3846,6 +3975,11 @@ export class RunnerGame {
     for (const f of this.floorTexts) {
       f.position.z += scroll;
       if (f.position.z > 4) f.position.z -= 90;
+    }
+    // ── Scroll wall "Shots Bitch" neon signs (same 90 m wavelength)
+    for (const s of this.wallShots) {
+      s.position.z += scroll;
+      if (s.position.z > 4) s.position.z -= 90;
     }
     // ── Scroll wall strobes (same 90 m wavelength) + per-frame
     // pulse: each strobe modulates its emissive panel opacity on a
@@ -5597,6 +5731,9 @@ export class RunnerGame {
       }
       if (typeof s.worldFloorTextSpacingZ === 'number') {
         this.worldFloorTextSpacingZ = s.worldFloorTextSpacingZ;
+      }
+      if (typeof s.worldWallShotsSpacingZ === 'number') {
+        this.worldWallShotsSpacingZ = s.worldWallShotsSpacingZ;
       }
 
       // ── Spawn pacing ────────────────────────────────────────
