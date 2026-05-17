@@ -40,6 +40,16 @@ export async function GET() {
             // (this site) renders an install CTA when the app
             // isn't installed.
             "/db/*",
+            // Generic "open the app" Universal Links (May 17, 2026).
+            // Covers /openApp, /openChat, and /openReservation/<id>.
+            // Used by the email "View in App" CTA + the WhatsApp
+            // auto-reply nudge + 3 WhatsApp template `{{link}}`
+            // slots. Replaces the legacy `link.tapemembers.com/a5pg1m`
+            // Linklyhq App-Store redirect — these open the app
+            // DIRECTLY when installed (no third-party hop). Without
+            // the app, the matching Next.js page (this site)
+            // renders a "Get the app" install CTA.
+            "/open*",
             // Other routes (landing, getTheApp, admin, privacy-
             // policy, delete-account) stay in the browser so
             // members can see the web pages when they want to.
