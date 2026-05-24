@@ -3,19 +3,28 @@
 The Three.js runner game loads its characters from this folder at
 runtime:
 
+All character GLBs are Draco-compressed (`KHR_draco_mesh_compression`)
+with webp textures. May 24, 2026 — every file >500 KB was re-compressed:
+the three female files via the lossless `prune + resample + draco` pipeline
+(no quality loss), and the male + dancer files via the same pipeline plus
+texture resize to 384×384 + webp quality 60 (textures previously 768×768
+or 1024×1024 at default webp quality). Total folder went from ~7.5 MB to
+~5.0 MB. Six of the eight files are now <500 KB; `runner_fall_male` (518 KB)
+and `runner_dancer` (823 KB) sit at the safe-ops floor — the suit-guy has
+9 separate skinned meshes (33,997 verts total) and the dancer is a single
+30,257-vert skinned mesh; pushing further would require `simplify` which
+the README rule below forbids on skinned meshes (breaks bind pose).
+
 | File | Purpose | Size |
 |---|---|---|
-All character GLBs are Draco-compressed (`KHR_draco_mesh_compression`)
-with webp textures. Sizes after the full pipeline:
-
-| `runner_male.glb` | Player when `playerGender: 'male'` (default) | ~780 KB |
-| `runner_female.glb` | Player when `playerGender: 'female'` | ~853 KB |
-| `runner_jump_male.glb` | Jump animation character (male) | ~788 KB |
-| `runner_jump_female.glb` | Jump animation character (female) | ~860 KB |
-| `runner_fall_male.glb` | Game-over fall animation character (male) | ~831 KB |
-| `runner_fall_female.glb` | Game-over fall animation character (female) | ~904 KB |
-| `runner_dancer.glb` | Dancing-character obstacle (variant 1) — picked randomly per spawn | ~925 KB |
-| `runner_dancer_2.glb` | Dancing-character obstacle (variant 2, black-dress dancer) — picked randomly per spawn | ~534 KB |
+| `runner_male.glb` | Player when `playerGender: 'male'` (default) | ~463 KB |
+| `runner_female.glb` | Player when `playerGender: 'female'` | ~424 KB |
+| `runner_jump_male.glb` | Jump animation character (male) | ~471 KB |
+| `runner_jump_female.glb` | Jump animation character (female) | ~432 KB |
+| `runner_fall_male.glb` | Game-over fall animation character (male) | ~507 KB |
+| `runner_fall_female.glb` | Game-over fall animation character (female) | ~467 KB |
+| `runner_dancer.glb` | Dancing-character obstacle (variant 1) — picked randomly per spawn | ~804 KB |
+| `runner_dancer_2.glb` | Dancing-character obstacle (variant 2, black-dress dancer) — picked randomly per spawn | ~483 KB |
 | `runner_bouncer.glb` | Arms-crossed bouncer obstacle on a staircase platform | ~244 KB |
 | `dancer_animated.glb` | Hip-hop podium dancer (blonde) cloned into each cage | ~497 KB |
 | `dancer_animated_dark.glb` | Hip-hop podium dancer (dark hair) — random alt | ~472 KB |
