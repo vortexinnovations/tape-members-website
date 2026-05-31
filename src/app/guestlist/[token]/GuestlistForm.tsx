@@ -24,6 +24,15 @@ declare global {
 const inputBase =
   "w-full rounded-lg border border-white/25 bg-white/5 px-4 py-3 text-white placeholder-white/40 outline-none transition focus:border-white/60 focus:bg-white/10";
 
+/** Title-case a name: first letter of each word uppercase, the rest
+ *  lowercase. Handles spaces, hyphens, apostrophes and accented
+ *  letters — e.g. "josé o'brien-smith" -> "José O'Brien-Smith". */
+function titleCaseName(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/(?:^|[\s'-])\p{L}/gu, (m) => m.toUpperCase());
+}
+
 export default function GuestlistForm({
   token,
   session,
@@ -55,6 +64,13 @@ export default function GuestlistForm({
       widgetIdRef.current = window.turnstile.render(widgetRef.current, {
         sitekey: TURNSTILE_SITE_KEY,
         theme: "dark",
+        // Stealth: run silently in the background and only render a
+        // visible challenge if Cloudflare decides interaction is
+        // genuinely required (bot-suspicious). For the vast majority of
+        // real guests the widget stays invisible and the token arrives
+        // automatically via `callback`. Matches the managed-widget
+        // behaviour on the other Tape sites.
+        appearance: "interaction-only",
         callback: (t: string) => setTsToken(t),
         "error-callback": () => setTsToken(""),
         "expired-callback": () => setTsToken(""),
@@ -112,7 +128,10 @@ export default function GuestlistForm({
       return;
     }
     if (!tsToken) {
-      setError("Please complete the verification below.");
+      // Stealth Turnstile usually resolves silently in <1s; if the user
+      // submits before it lands (or a challenge is showing), nudge them
+      // to retry rather than point at a widget that may be invisible.
+      setError("Just a moment — verifying you're human. Please try again.");
       return;
     }
     setSubmitting(true);
@@ -122,8 +141,10 @@ export default function GuestlistForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           token,
-          fullName: fullName.trim(),
-          guestNames: guests.map((g) => g.trim()).filter(Boolean),
+          fullName: titleCaseName(fullName.trim()),
+          guestNames: guests
+            .map((g) => titleCaseName(g.trim()))
+            .filter(Boolean),
           email: email.trim(),
           phone: phone.trim(),
           turnstileToken: tsToken,
@@ -155,8 +176,8 @@ export default function GuestlistForm({
   // ── Success ──
   if (result) {
     const names = [
-      fullName.trim(),
-      ...guests.map((g) => g.trim()).filter(Boolean),
+      titleCaseName(fullName.trim()),
+      ...guests.map((g) => titleCaseName(g.trim())).filter(Boolean),
     ].filter(Boolean);
     const hasEventDetails =
       !!session.eventName ||
@@ -197,15 +218,22 @@ export default function GuestlistForm({
           {session.doorInstruction}
         </p>
 
-        {/* Names on the list. */}
+        {/* Names on the list — numbered, in submission order. */}
         {names.length > 0 && (
           <div className="mt-3">
             <p className="text-[11px] uppercase tracking-wide text-white/40">
-              {names.length === 1 ? "On the list" : "On the list"}
+              On the list
             </p>
-            <p className="mt-0.5 text-sm font-light text-white/80">
-              {names.join(" · ")}
-            </p>
+            <ol className="mt-1 inline-block text-left">
+              {names.map((n, i) => (
+                <li
+                  key={i}
+                  className="text-sm font-light leading-relaxed text-white/85"
+                >
+                  <span className="text-white/40">{i + 1})</span> {n}
+                </li>
+              ))}
+            </ol>
           </div>
         )}
 
@@ -255,9 +283,13 @@ export default function GuestlistForm({
             className={inputBase}
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
+            onBlur={() => setFullName((v) => titleCaseName(v.trim()))}
             placeholder="First and last name"
             maxLength={80}
             autoComplete="name"
+            autoCapitalize="words"
+            autoCorrect="off"
+            spellCheck={false}
           />
         </div>
 
@@ -277,8 +309,16 @@ export default function GuestlistForm({
                     next[i] = e.target.value;
                     setGuests(next);
                   }}
+                  onBlur={() => {
+                    const next = [...guests];
+                    next[i] = titleCaseName(next[i].trim());
+                    setGuests(next);
+                  }}
                   placeholder={`Guest ${i + 1} full name`}
                   maxLength={80}
+                  autoCapitalize="words"
+                  autoCorrect="off"
+                  spellCheck={false}
                 />
                 <button
                   type="button"
