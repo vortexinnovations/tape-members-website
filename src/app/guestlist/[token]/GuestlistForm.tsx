@@ -218,24 +218,37 @@ export default function GuestlistForm({
           {session.doorInstruction}
         </p>
 
-        {/* Names on the list — numbered, in submission order. */}
+        {/* Names on the list — numbered, in submission order. Fixed
+            right-aligned number column so every name starts at the
+            same x and the list reads as a tidy column. */}
         {names.length > 0 && (
-          <div className="mt-3">
+          <div className="mt-4">
             <p className="text-[11px] uppercase tracking-wide text-white/40">
               On the list
             </p>
-            <ol className="mt-1 inline-block text-left">
+            <ol className="mt-1.5 inline-block space-y-1 text-left">
               {names.map((n, i) => (
-                <li
-                  key={i}
-                  className="text-sm font-light leading-relaxed text-white/85"
-                >
-                  <span className="text-white/40">{i + 1})</span> {n}
+                <li key={i} className="flex items-baseline gap-2.5">
+                  <span className="w-7 shrink-0 text-right text-sm font-light tabular-nums text-white/40">
+                    {i + 1})
+                  </span>
+                  <span className="text-sm font-light text-white/90">{n}</span>
                 </li>
               ))}
             </ol>
           </div>
         )}
+
+        {/* Make another booking — back to a fresh form (same link). */}
+        <div className="mt-6">
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="rounded-lg border border-[#cb775a] px-5 py-2.5 text-sm font-semibold text-[#cb775a] transition hover:bg-[#cb775a]/10 active:opacity-80"
+          >
+            + Make another booking
+          </button>
+        </div>
 
         {session.appAdvertEnabled && (
           <div className="mt-8 border-t border-white/10 pt-6">
