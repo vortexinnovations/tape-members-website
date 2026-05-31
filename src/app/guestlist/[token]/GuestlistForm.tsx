@@ -154,6 +154,14 @@ export default function GuestlistForm({
 
   // ── Success ──
   if (result) {
+    const names = [
+      fullName.trim(),
+      ...guests.map((g) => g.trim()).filter(Boolean),
+    ].filter(Boolean);
+    const hasEventDetails =
+      !!session.eventName ||
+      !!session.eventDateDisplay ||
+      !!session.locationAddress;
     return (
       <div className="rounded-3xl border border-white/10 bg-black/55 p-8 text-center backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
         <h1 className="font-tape text-xl uppercase tracking-[0.15em] text-white">
@@ -162,6 +170,24 @@ export default function GuestlistForm({
         <p className="mt-3 text-sm font-light leading-relaxed text-white/75">
           {session.successMessage}
         </p>
+
+        {/* Event details — same block as the form top. */}
+        {hasEventDetails && (
+          <div className="mt-5 space-y-1 rounded-xl border border-white/10 bg-white/5 p-4 text-left text-sm">
+            {session.eventName ? (
+              <div className="font-semibold text-white">
+                {session.eventName}
+              </div>
+            ) : null}
+            {session.eventDateDisplay ? (
+              <div className="text-white/70">{session.eventDateDisplay}</div>
+            ) : null}
+            {session.locationAddress ? (
+              <div className="text-white/60">{session.locationAddress}</div>
+            ) : null}
+          </div>
+        )}
+
         <div className="mt-6 flex justify-center">
           <div className="rounded-2xl bg-white p-4 shadow-lg">
             <QRCodeSVG value={result.doorQrData} size={200} level="M" />
@@ -170,18 +196,27 @@ export default function GuestlistForm({
         <p className="mt-4 text-xs font-medium uppercase tracking-wide text-[#cb775a]">
           {session.doorInstruction}
         </p>
-        <p className="mt-1 text-xs font-light text-white/50">
-          {result.partySize === 1
-            ? "1 person on the list"
-            : `${result.partySize} people on the list`}
-          {session.eventName ? ` · ${session.eventName}` : ""}
-        </p>
+
+        {/* Names on the list. */}
+        {names.length > 0 && (
+          <div className="mt-3">
+            <p className="text-[11px] uppercase tracking-wide text-white/40">
+              {names.length === 1 ? "On the list" : "On the list"}
+            </p>
+            <p className="mt-0.5 text-sm font-light text-white/80">
+              {names.join(" · ")}
+            </p>
+          </div>
+        )}
+
         {session.appAdvertEnabled && (
           <div className="mt-8 border-t border-white/10 pt-6">
             <p className="mb-4 text-sm font-light text-white/70">
               {session.appAdvertText}
             </p>
-            <AppInstallButton />
+            <div className="flex justify-center">
+              <AppInstallButton />
+            </div>
           </div>
         )}
       </div>
