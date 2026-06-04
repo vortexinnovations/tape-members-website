@@ -218,6 +218,37 @@ export default function GuestlistForm({
           {session.doorInstruction}
         </p>
 
+        {/* Directions — Google Maps universal directions URL (opens the
+            Maps app on mobile if installed, the web otherwise). */}
+        {session.locationAddress ? (
+          <div className="mt-5">
+            <a
+              href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+                session.locationAddress,
+              )}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-lg bg-[#cb775a] px-6 py-3 text-sm font-semibold text-black transition hover:opacity-90 active:opacity-80"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                <circle cx="12" cy="10" r="3" />
+              </svg>
+              Get directions
+            </a>
+          </div>
+        ) : null}
+
         {/* Names on the list — numbered, in submission order. Fixed
             right-aligned number column so every name starts at the
             same x and the list reads as a tidy column. */}
