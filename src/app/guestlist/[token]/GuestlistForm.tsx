@@ -223,7 +223,7 @@ export default function GuestlistForm({
         {session.locationAddress ? (
           <div className="mt-5">
             <a
-              href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
                 session.locationAddress,
               )}`}
               target="_blank"
