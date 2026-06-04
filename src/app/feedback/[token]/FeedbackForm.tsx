@@ -194,8 +194,7 @@ export default function FeedbackForm({
     );
   }
 
-  const hasContext =
-    !!session.eventName || !!session.eventDateDisplay || !!session.tableNumber;
+  const hasContext = !!session.eventDateDisplay;
 
   // ── Form ──
   return (
@@ -210,16 +209,13 @@ export default function FeedbackForm({
       ) : null}
 
       {hasContext && (
-        <div className="mt-5 space-y-1 rounded-xl border border-white/10 bg-white/5 p-4 text-sm">
-          {session.eventName ? (
-            <div className="font-semibold text-white">{session.eventName}</div>
-          ) : null}
-          {session.eventDateDisplay ? (
-            <div className="text-white/70">{session.eventDateDisplay}</div>
-          ) : null}
-          {session.tableNumber ? (
-            <div className="text-white/60">Table {session.tableNumber}</div>
-          ) : null}
+        <div className="mt-5 rounded-xl border border-white/10 bg-white/5 p-4 text-sm">
+          {/* Client-facing context: date only. Event name + table number
+              are intentionally hidden here (still stored on the response
+              for the admin review page). */}
+          <div className="font-medium text-white/80">
+            {session.eventDateDisplay}
+          </div>
         </div>
       )}
 
