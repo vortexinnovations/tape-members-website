@@ -51,6 +51,10 @@ export default function FeedbackForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
+  // Stamped the moment the submission lands — shown on the success
+  // screen's claim panel so the guest has something concrete to show
+  // their server ("Completed 11:42 PM").
+  const [completedAt, setCompletedAt] = useState("");
 
   // ── Turnstile (manual explicit render — no npm dep) ──
   const widgetRef = useRef<HTMLDivElement>(null);
@@ -157,7 +161,15 @@ export default function FeedbackForm({
         resetTurnstile();
         return;
       }
+      setCompletedAt(
+        new Date().toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+      );
       setDone(true);
+      // The claim panel is the payoff — make sure it's in view.
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } catch {
       setError("Network error. Please try again.");
       resetTurnstile();
@@ -181,6 +193,37 @@ export default function FeedbackForm({
             {session.thankYouBody}
           </p>
         ) : null}
+
+        {/* The payoff — the guest shows this panel to their server. */}
+        <div className="relative mt-6 overflow-hidden rounded-2xl border border-[#cb775a]/45 bg-black/40 p-6">
+          <div
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_120%_at_50%_-20%,rgba(203,119,90,0.30),transparent_60%)]"
+            aria-hidden="true"
+          />
+          <div className="relative">
+            <TrayIcon className="mx-auto h-10 w-auto" />
+            <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.3em] text-[#cb775a]">
+              Unlocked
+            </p>
+            <h2 className="font-tape mt-1 text-lg uppercase leading-snug tracking-[0.12em] text-white">
+              Your tray of shots is on its way
+            </h2>
+            <p className="mt-2 text-sm font-light leading-relaxed text-white/75">
+              Show this screen to your server to claim it — with our
+              compliments.
+            </p>
+            {completedAt ? (
+              <p className="mt-3 inline-block rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] font-light text-white/60">
+                Completed {completedAt}
+              </p>
+            ) : null}
+          </div>
+          <div
+            className="tape-shimmer pointer-events-none absolute inset-y-0 left-0 w-1/2 bg-gradient-to-r from-transparent via-white/10 to-transparent"
+            aria-hidden="true"
+          />
+        </div>
+
         <div className="mt-8 border-t border-white/10 pt-6">
           <p className="mb-4 text-sm font-light text-white/70">
             Get the Tape Members app — be first to hear about events and earn
@@ -198,7 +241,9 @@ export default function FeedbackForm({
 
   // ── Form ──
   return (
-    <div className="rounded-3xl border border-white/10 bg-black/55 p-7 backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
+    <>
+      <ShotsIncentiveHero />
+      <div className="rounded-3xl border border-white/10 bg-black/55 p-7 backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
       <h1 className="font-tape text-xl uppercase tracking-[0.15em] text-white">
         {session.title}
       </h1>
@@ -265,6 +310,16 @@ export default function FeedbackForm({
           <p className="text-sm font-medium text-red-400">{error}</p>
         ) : null}
 
+        {/* Goal-gradient nudge — restate the reward at the moment of
+            action, right where the thumb is heading. */}
+        <div className="flex items-center justify-center gap-3 rounded-xl border border-[#cb775a]/30 bg-[#cb775a]/10 px-4 py-3">
+          <TrayIcon className="h-6 w-auto shrink-0" />
+          <p className="text-xs font-light leading-snug text-white/80">
+            One tap to go — send it and your complimentary tray is on its
+            way.
+          </p>
+        </div>
+
         <button
           type="submit"
           disabled={submitting}
@@ -273,7 +328,97 @@ export default function FeedbackForm({
           {submitting ? "Sending…" : session.submitLabel}
         </button>
       </form>
-    </div>
+      </div>
+    </>
+  );
+}
+
+// ── Complimentary-tray incentive (Jul 17, 2026) ─────────────────────
+// The first thing a guest sees: finish the feedback and a tray of
+// shots arrives at the table, on the house. Three touchpoints — the
+// hero card above the form (promise), a slim nudge beside the submit
+// button (goal-gradient: restate the reward at the moment of effort),
+// and the claim panel on the success screen (payoff the guest shows
+// their server). Copy deliberately never uses the word "free" —
+// "on us" / "on the house" / "complimentary" only.
+
+/** Line-art tray of four shot glasses in the brand copper. */
+function TrayIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 96 44"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+    >
+      {[10, 32, 54, 76].map((x) => (
+        <g key={x}>
+          {/* liquid */}
+          <path
+            d={`M${x + 3} 12 L${x + 13} 12 L${x + 11.4} 25 L${x + 4.6} 25 Z`}
+            fill={ACCENT}
+            fillOpacity="0.4"
+          />
+          {/* glass */}
+          <path
+            d={`M${x + 1} 3 L${x + 15} 3 L${x + 12} 26 L${x + 4} 26 Z`}
+            stroke={ACCENT}
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          />
+        </g>
+      ))}
+      {/* tray + legs */}
+      <rect
+        x="3"
+        y="31"
+        width="90"
+        height="5.5"
+        rx="2.75"
+        stroke={ACCENT}
+        strokeWidth="1.6"
+      />
+      <path
+        d="M13 36.5 L10 43 M83 36.5 L86 43"
+        stroke={ACCENT}
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/** Copper-glass hero card rendered above the form — the offer. */
+function ShotsIncentiveHero() {
+  return (
+    <section
+      aria-label="A complimentary tray of shots when you complete the feedback"
+      className="relative mb-4 overflow-hidden rounded-3xl border border-[#cb775a]/40 bg-black/55 p-6 pt-7 text-center backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55),0_0_40px_rgba(203,119,90,0.14)]"
+    >
+      {/* copper glow bleeding in from the top */}
+      <div
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_120%_at_50%_-20%,rgba(203,119,90,0.30),transparent_60%)]"
+        aria-hidden="true"
+      />
+      <div className="relative">
+        <TrayIcon className="mx-auto h-11 w-auto" />
+        <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.32em] text-[#cb775a]">
+          With our compliments
+        </p>
+        <h2 className="font-tape mt-1.5 text-[22px] uppercase leading-snug tracking-[0.12em] text-white">
+          A tray of shots, on&nbsp;us
+        </h2>
+        <p className="mx-auto mt-2 max-w-[32ch] text-sm font-light leading-relaxed text-white/75">
+          Tell us how tonight&apos;s going, and a tray of shots arrives at
+          your table — on the house.
+        </p>
+      </div>
+      {/* slow light sweep to catch the eye (hidden for reduced motion) */}
+      <div
+        className="tape-shimmer pointer-events-none absolute inset-y-0 left-0 w-1/2 bg-gradient-to-r from-transparent via-white/10 to-transparent"
+        aria-hidden="true"
+      />
+    </section>
   );
 }
 

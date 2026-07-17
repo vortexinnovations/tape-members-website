@@ -25,6 +25,30 @@
   letter-spacing: 0.04em;
 }
 
+/* Feedback-page incentive (Jul 17, 2026): a slow light sweep across
+ * the "tray of shots, on us" card so the offer catches the eye without
+ * shouting. The element it animates is a narrow gradient bar; the
+ * percentages are relative to that bar's own width, so it starts fully
+ * off-canvas left and exits fully off-canvas right, then rests until
+ * the next cycle. Hidden entirely for reduced-motion users. */
+@keyframes tape-shimmer {
+  0% {
+    transform: translateX(-130%) skewX(-16deg);
+  }
+  55%,
+  100% {
+    transform: translateX(330%) skewX(-16deg);
+  }
+}
+.tape-shimmer {
+  animation: tape-shimmer 5s ease-in-out 1.2s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tape-shimmer {
+    display: none;
+  }
+}
+
 /* For the blurred reel share background: keep the video covering
  * the viewport even when its aspect ratio doesn't match, with a
  * heavy blur so the brand card on top reads cleanly. */
