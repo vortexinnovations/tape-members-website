@@ -66,7 +66,10 @@ function stringsFor(
   };
 }
 
-/** Compact language pill row (EN / ΕΛ / IT / FR / ES / DE). */
+/** Language pill row (flag + code, e.g. 🇬🇷 ΕΛ). The text code stays
+ *  alongside the flag because Windows desktops render flag emoji as
+ *  plain letter pairs — phones (the real audience) show proper
+ *  flags. */
 function LangSwitcher({
   lang,
   onChange,
@@ -75,7 +78,7 @@ function LangSwitcher({
   onChange: (l: LangCode) => void;
 }) {
   return (
-    <div className="mb-5 flex flex-wrap justify-end gap-1.5">
+    <div className="mb-5 flex flex-wrap justify-center gap-2">
       {LANGS.map((l) => (
         <button
           key={l.code}
@@ -84,13 +87,17 @@ function LangSwitcher({
           aria-label={l.name}
           onClick={() => onChange(l.code)}
           className={
-            "rounded-full px-2.5 py-1 text-[11px] font-semibold " +
-            "tracking-wide transition " +
+            "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 " +
+            "text-[13px] font-semibold tracking-wide transition " +
             (l.code === lang
               ? "bg-[#cb775a] text-black"
-              : "border border-white/20 text-white/55 hover:text-white")
+              : "border border-white/25 bg-white/5 text-white/65 " +
+                "hover:border-white/50 hover:text-white")
           }
         >
+          <span className="text-[15px] leading-none" aria-hidden="true">
+            {l.flag}
+          </span>
           {l.pill}
         </button>
       ))}

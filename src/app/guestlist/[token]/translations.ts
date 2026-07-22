@@ -21,14 +21,19 @@
 
 export type LangCode = "en" | "el" | "it" | "fr" | "es" | "de" | "pt";
 
-export const LANGS: { code: LangCode; pill: string; name: string }[] = [
-  { code: "en", pill: "EN", name: "English" },
-  { code: "el", pill: "ΕΛ", name: "Ελληνικά" },
-  { code: "it", pill: "IT", name: "Italiano" },
-  { code: "fr", pill: "FR", name: "Français" },
-  { code: "es", pill: "ES", name: "Español" },
-  { code: "de", pill: "DE", name: "Deutsch" },
-  { code: "pt", pill: "PT", name: "Português" },
+export const LANGS: {
+  code: LangCode;
+  pill: string;
+  flag: string;
+  name: string;
+}[] = [
+  { code: "en", pill: "EN", flag: "🇬🇧", name: "English" },
+  { code: "el", pill: "ΕΛ", flag: "🇬🇷", name: "Ελληνικά" },
+  { code: "it", pill: "IT", flag: "🇮🇹", name: "Italiano" },
+  { code: "fr", pill: "FR", flag: "🇫🇷", name: "Français" },
+  { code: "es", pill: "ES", flag: "🇪🇸", name: "Español" },
+  { code: "de", pill: "DE", flag: "🇩🇪", name: "Deutsch" },
+  { code: "pt", pill: "PT", flag: "🇵🇹", name: "Português" },
 ];
 
 export interface GuestlistStrings {
