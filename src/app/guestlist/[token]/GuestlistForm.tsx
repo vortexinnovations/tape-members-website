@@ -10,6 +10,15 @@ import {
   type GuestlistSession,
   type GuestlistSubmitResult,
 } from "../../lib/guestlist";
+import {
+  LANGS,
+  STRINGS,
+  localizeDateDisplay,
+  pickLang,
+  translateBackendError,
+  type GuestlistStrings,
+  type LangCode,
+} from "./translations";
 
 declare global {
   interface Window {
@@ -24,6 +33,8 @@ declare global {
 const inputBase =
   "w-full rounded-lg border border-white/25 bg-white/5 px-4 py-3 text-white placeholder-white/40 outline-none transition focus:border-white/60 focus:bg-white/10";
 
+const LANG_STORAGE_KEY = "tape-guestlist-lang";
+
 /** Title-case a name: first letter of each word uppercase, the rest
  *  lowercase. Handles spaces, hyphens, apostrophes and accented
  *  letters — e.g. "josé o'brien-smith" -> "José O'Brien-Smith". */
@@ -33,22 +44,105 @@ function titleCaseName(s: string): string {
     .replace(/(?:^|[\s'-])\p{L}/gu, (m) => m.toUpperCase());
 }
 
+/** Resolve the copy for the active language. English keeps preferring
+ *  the admin-configured session strings (from /qrGuestlistAdmin);
+ *  other languages use the static translations for everything, since
+ *  custom English copy can't be machine-translated. */
+function stringsFor(
+  lang: LangCode,
+  session: GuestlistSession,
+): GuestlistStrings {
+  const base = STRINGS[lang];
+  if (lang !== "en") return base;
+  return {
+    ...base,
+    formTitle: session.formTitle || base.formTitle,
+    formSubtitle: session.formSubtitle || base.formSubtitle,
+    joinButton: session.joinButtonLabel || base.joinButton,
+    successTitle: session.successTitle || base.successTitle,
+    successMessage: session.successMessage || base.successMessage,
+    doorInstruction: session.doorInstruction || base.doorInstruction,
+    appAdvert: session.appAdvertText || base.appAdvert,
+  };
+}
+
+/** Compact language pill row (EN / ΕΛ / IT / FR / ES / DE). */
+function LangSwitcher({
+  lang,
+  onChange,
+}: {
+  lang: LangCode;
+  onChange: (l: LangCode) => void;
+}) {
+  return (
+    <div className="mb-5 flex flex-wrap justify-end gap-1.5">
+      {LANGS.map((l) => (
+        <button
+          key={l.code}
+          type="button"
+          title={l.name}
+          aria-label={l.name}
+          onClick={() => onChange(l.code)}
+          className={
+            "rounded-full px-2.5 py-1 text-[11px] font-semibold " +
+            "tracking-wide transition " +
+            (l.code === lang
+              ? "bg-[#cb775a] text-black"
+              : "border border-white/20 text-white/55 hover:text-white")
+          }
+        >
+          {l.pill}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function GuestlistForm({
   token,
   session,
   prefillEmail,
+  initialLang,
 }: {
   token: string;
   session: GuestlistSession;
   prefillEmail: string;
+  initialLang: LangCode;
 }) {
   const [fullName, setFullName] = useState("");
   const [guests, setGuests] = useState<string[]>([]);
   const [email, setEmail] = useState(prefillEmail);
   const [phone, setPhone] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Errors are stored as-received (client keys resolve at render so a
+  // language switch re-translates a visible error immediately).
   const [error, setError] = useState("");
   const [result, setResult] = useState<GuestlistSubmitResult | null>(null);
+
+  // ── Language ──
+  // Server-detected Accept-Language seeds the initial value; a saved
+  // explicit choice (localStorage) overrides it on mount.
+  const [lang, setLang] = useState<LangCode>(initialLang);
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(LANG_STORAGE_KEY);
+      if (saved && LANGS.some((l) => l.code === saved)) {
+        setLang(saved as LangCode);
+      }
+    } catch {
+      /* private mode — keep the server-detected language */
+    }
+  }, []);
+  const changeLang = (l: LangCode) => {
+    setLang(l);
+    try {
+      window.localStorage.setItem(LANG_STORAGE_KEY, l);
+    } catch {
+      /* no-op */
+    }
+  };
+  const t = stringsFor(lang, session);
+  const dateDisplay = localizeDateDisplay(session.eventDateDisplay, t);
 
   // ── Turnstile (manual explicit render — no npm dep) ──
   const widgetRef = useRef<HTMLDivElement>(null);
@@ -116,22 +210,22 @@ export default function GuestlistForm({
     ev.preventDefault();
     setError("");
     if (!fullName.trim()) {
-      setError("Please enter your name.");
+      setError(t.errName);
       return;
     }
     if (session.emailMandatory && !email.trim()) {
-      setError("Please enter your email address.");
+      setError(t.errEmail);
       return;
     }
     if (session.phoneShown && session.phoneMandatory && !phone.trim()) {
-      setError("Please enter your phone number.");
+      setError(t.errPhone);
       return;
     }
     if (!tsToken) {
       // Stealth Turnstile usually resolves silently in <1s; if the user
       // submits before it lands (or a challenge is showing), nudge them
       // to retry rather than point at a widget that may be invisible.
-      setError("Just a moment — verifying you're human. Please try again.");
+      setError(t.errHuman);
       return;
     }
     setSubmitting(true);
@@ -155,7 +249,9 @@ export default function GuestlistForm({
         GuestlistSubmitResult & { error: string }
       >;
       if (!res.ok || !data.success) {
-        setError(data.error || "Something went wrong. Please try again.");
+        // Backend errors arrive in English — map the known ones to the
+        // active language, pass anything unrecognised through.
+        setError(translateBackendError(data.error || "", t) || t.errGeneric);
         resetTurnstile();
         return;
       }
@@ -166,7 +262,7 @@ export default function GuestlistForm({
         partySize: data.partySize || 1,
       });
     } catch {
-      setError("Network error. Please try again.");
+      setError(t.errNetwork);
       resetTurnstile();
     } finally {
       setSubmitting(false);
@@ -186,10 +282,10 @@ export default function GuestlistForm({
     return (
       <div className="rounded-3xl border border-white/10 bg-black/55 p-8 text-center backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
         <h1 className="font-tape text-xl uppercase tracking-[0.15em] text-white">
-          {session.successTitle}
+          {t.successTitle}
         </h1>
         <p className="mt-3 text-sm font-light leading-relaxed text-white/75">
-          {session.successMessage}
+          {t.successMessage}
         </p>
 
         {/* Event details — same block as the form top. */}
@@ -201,7 +297,7 @@ export default function GuestlistForm({
               </div>
             ) : null}
             {session.eventDateDisplay ? (
-              <div className="text-white/70">{session.eventDateDisplay}</div>
+              <div className="text-white/70">{dateDisplay}</div>
             ) : null}
             {session.locationAddress ? (
               <div className="text-white/60">{session.locationAddress}</div>
@@ -215,7 +311,7 @@ export default function GuestlistForm({
           </div>
         </div>
         <p className="mt-4 text-xs font-medium uppercase tracking-wide text-[#cb775a]">
-          {session.doorInstruction}
+          {t.doorInstruction}
         </p>
 
         {/* Directions — Google Maps universal directions URL (opens the
@@ -244,7 +340,7 @@ export default function GuestlistForm({
                 <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
                 <circle cx="12" cy="10" r="3" />
               </svg>
-              Get directions
+              {t.getDirections}
             </a>
           </div>
         ) : null}
@@ -255,7 +351,7 @@ export default function GuestlistForm({
         {names.length > 0 && (
           <div className="mt-4">
             <p className="text-[11px] uppercase tracking-wide text-white/40">
-              On the list
+              {t.onTheList}
             </p>
             <ol className="mt-1.5 inline-block space-y-1 text-left">
               {names.map((n, i) => (
@@ -277,14 +373,14 @@ export default function GuestlistForm({
             onClick={() => window.location.reload()}
             className="rounded-lg border border-[#cb775a] px-5 py-2.5 text-sm font-semibold text-[#cb775a] transition hover:bg-[#cb775a]/10 active:opacity-80"
           >
-            + Make another booking
+            {t.makeAnother}
           </button>
         </div>
 
         {session.appAdvertEnabled && (
           <div className="mt-8 border-t border-white/10 pt-6">
             <p className="mb-4 text-sm font-light text-white/70">
-              {session.appAdvertText}
+              {t.appAdvert}
             </p>
             <div className="flex justify-center">
               <AppInstallButton />
@@ -298,11 +394,13 @@ export default function GuestlistForm({
   // ── Form ──
   return (
     <div className="rounded-3xl border border-white/10 bg-black/55 p-7 backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
+      <LangSwitcher lang={lang} onChange={changeLang} />
+
       <h1 className="font-tape text-xl uppercase tracking-[0.15em] text-white">
-        {session.formTitle}
+        {t.formTitle}
       </h1>
       <p className="mt-2 text-sm font-light leading-relaxed text-white/70">
-        {session.formSubtitle}
+        {t.formSubtitle}
       </p>
 
       {/* Event context */}
@@ -311,7 +409,7 @@ export default function GuestlistForm({
           <div className="font-semibold text-white">{session.eventName}</div>
         ) : null}
         {session.eventDateDisplay ? (
-          <div className="text-white/70">{session.eventDateDisplay}</div>
+          <div className="text-white/70">{dateDisplay}</div>
         ) : null}
         {session.locationAddress ? (
           <div className="text-white/60">{session.locationAddress}</div>
@@ -321,14 +419,14 @@ export default function GuestlistForm({
       <form onSubmit={onSubmit} className="mt-6 space-y-4">
         <div>
           <label className="mb-1.5 block text-xs uppercase tracking-wide text-white/60">
-            Your full name
+            {t.fullNameLabel}
           </label>
           <input
             className={inputBase}
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
             onBlur={() => setFullName((v) => titleCaseName(v.trim()))}
-            placeholder="First and last name"
+            placeholder={t.fullNamePlaceholder}
             maxLength={80}
             autoComplete="name"
             autoCapitalize="words"
@@ -340,7 +438,7 @@ export default function GuestlistForm({
         {/* Guests */}
         <div>
           <label className="mb-1.5 block text-xs uppercase tracking-wide text-white/60">
-            Your guests (optional)
+            {t.guestsLabel}
           </label>
           <div className="space-y-2">
             {guests.map((g, i) => (
@@ -358,7 +456,7 @@ export default function GuestlistForm({
                     next[i] = titleCaseName(next[i].trim());
                     setGuests(next);
                   }}
-                  placeholder={`Guest ${i + 1} full name`}
+                  placeholder={t.guestPlaceholder(i + 1)}
                   maxLength={80}
                   autoCapitalize="words"
                   autoCorrect="off"
@@ -370,7 +468,7 @@ export default function GuestlistForm({
                     setGuests(guests.filter((_, idx) => idx !== i))
                   }
                   className="shrink-0 rounded-lg border border-white/20 px-3 text-white/60 transition hover:text-white"
-                  aria-label="Remove guest"
+                  aria-label={t.removeGuest}
                 >
                   ✕
                 </button>
@@ -383,25 +481,26 @@ export default function GuestlistForm({
               onClick={() => setGuests([...guests, ""])}
               className="mt-2 text-sm font-medium text-[#cb775a] transition hover:opacity-80"
             >
-              + Add a guest
+              {t.addGuest}
             </button>
           ) : (
             <p className="mt-2 text-xs text-white/40">
-              Up to {session.maxGuests} guests.
+              {t.upToGuests(session.maxGuests)}
             </p>
           )}
         </div>
 
         <div>
           <label className="mb-1.5 block text-xs uppercase tracking-wide text-white/60">
-            Email{session.emailMandatory ? "" : " (optional)"}
+            {t.emailLabel}
+            {session.emailMandatory ? "" : t.optionalSuffix}
           </label>
           <input
             className={inputBase}
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
+            placeholder={t.emailPlaceholder}
             maxLength={254}
             autoComplete="email"
             inputMode="email"
@@ -411,14 +510,15 @@ export default function GuestlistForm({
         {session.phoneShown && (
           <div>
             <label className="mb-1.5 block text-xs uppercase tracking-wide text-white/60">
-              Phone{session.phoneMandatory ? "" : " (optional)"}
+              {t.phoneLabel}
+              {session.phoneMandatory ? "" : t.optionalSuffix}
             </label>
             <input
               className={inputBase}
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder="Mobile number"
+              placeholder={t.phonePlaceholder}
               maxLength={30}
               autoComplete="tel"
               inputMode="tel"
@@ -438,13 +538,13 @@ export default function GuestlistForm({
           disabled={submitting}
           className="w-full rounded-lg bg-[#cb775a] px-4 py-3.5 font-semibold text-black transition hover:opacity-90 active:opacity-80 disabled:opacity-50"
         >
-          {submitting ? "Joining…" : session.joinButtonLabel}
+          {submitting ? t.joining : t.joinButton}
         </button>
       </form>
 
       {session.appAdvertEnabled ? (
         <p className="mt-5 text-center text-xs font-light leading-relaxed text-white/45">
-          {session.appAdvertText}
+          {t.appAdvert}
         </p>
       ) : null}
     </div>

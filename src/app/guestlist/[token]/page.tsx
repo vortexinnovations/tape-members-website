@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 
 import AppInstallButton from "../../components/AppInstallButton";
 import { fetchGuestlistSession } from "../../lib/guestlist";
 import GuestlistForm from "./GuestlistForm";
+import { STRINGS, pickLang, type GuestlistStrings } from "./translations";
 
 type Params = { token: string };
 
@@ -15,6 +17,12 @@ type Params = { token: string };
  *
  * If the token is invalid / closed / expired / full we render a
  * graceful card with a "get the app" CTA rather than a 404.
+ *
+ * July 22, 2026 — multi-language: the browser's Accept-Language
+ * header picks the initial language server-side (EN/EL/IT/FR/ES/DE/
+ * PT — Mykonos visitor mix); the form has a pill switcher whose
+ * choice persists in localStorage. Fallback (dead-link) cards are
+ * server-rendered so they use the header-detected language only.
  */
 export default async function GuestlistPage({
   params,
@@ -25,15 +33,15 @@ export default async function GuestlistPage({
 }) {
   const { token } = await params;
   const { e } = await searchParams;
+  const hdrs = await headers();
+  const lang = pickLang(hdrs.get("accept-language"));
+  const t = STRINGS[lang];
   const session = await fetchGuestlistSession(token);
 
   if (!session) {
     return (
       <GuestlistShell>
-        <Fallback
-          title="Link not found"
-          message="This guest-list link is no longer valid. Ask the promoter for a fresh one."
-        />
+        <Fallback t={t} title={t.fbNotFoundTitle} message={t.fbNotFoundMsg} />
       </GuestlistShell>
     );
   }
@@ -41,8 +49,9 @@ export default async function GuestlistPage({
     return (
       <GuestlistShell>
         <Fallback
-          title="Sign-ups closed"
-          message="Guest-list sign-ups are currently closed. Please check back later."
+          t={t}
+          title={t.fbSignupsClosedTitle}
+          message={t.fbSignupsClosedMsg}
         />
       </GuestlistShell>
     );
@@ -51,8 +60,9 @@ export default async function GuestlistPage({
     return (
       <GuestlistShell>
         <Fallback
-          title="Guest list closed"
-          message="This guest list has closed. Ask the promoter for tonight's link."
+          t={t}
+          title={t.fbListClosedTitle}
+          message={t.fbListClosedMsg}
         />
       </GuestlistShell>
     );
@@ -60,10 +70,7 @@ export default async function GuestlistPage({
   if (session.capReached) {
     return (
       <GuestlistShell>
-        <Fallback
-          title="Guest list full"
-          message="Sorry — this guest list is now full."
-        />
+        <Fallback t={t} title={t.fbFullTitle} message={t.fbFullMsg} />
       </GuestlistShell>
     );
   }
@@ -74,6 +81,7 @@ export default async function GuestlistPage({
         token={token}
         session={session}
         prefillEmail={(e || "").trim()}
+        initialLang={lang}
       />
     </GuestlistShell>
   );
@@ -90,7 +98,15 @@ function GuestlistShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Fallback({ title, message }: { title: string; message: string }) {
+function Fallback({
+  t,
+  title,
+  message,
+}: {
+  t: GuestlistStrings;
+  title: string;
+  message: string;
+}) {
   return (
     <div className="rounded-3xl border border-white/10 bg-black/55 p-8 text-center backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
       <h1 className="font-tape text-lg uppercase tracking-[0.15em] text-white">
@@ -100,9 +116,7 @@ function Fallback({ title, message }: { title: string; message: string }) {
         {message}
       </p>
       <div className="mt-7 flex flex-col items-center gap-3">
-        <p className="text-xs font-light text-white/50">
-          While you&apos;re here — get the Tape Members app:
-        </p>
+        <p className="text-xs font-light text-white/50">{t.fbAppNudge}</p>
         <AppInstallButton />
       </div>
     </div>
