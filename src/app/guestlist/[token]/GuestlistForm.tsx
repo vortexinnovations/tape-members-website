@@ -66,10 +66,96 @@ function stringsFor(
   };
 }
 
-/** Language pill row (flag + code, e.g. 🇬🇷 ΕΛ). The text code stays
- *  alongside the flag because Windows desktops render flag emoji as
- *  plain letter pairs — phones (the real audience) show proper
- *  flags. */
+/** Tiny inline-SVG flag — used instead of flag EMOJI because Windows
+ *  desktops render flag emoji as plain letter pairs ("GB", "GR"),
+ *  which looked broken next to the text codes. SVGs render
+ *  identically on every platform. Spain/Portugal use the plain
+ *  civil-flag bands (no coat of arms) — recognisable at 18×12. */
+function FlagIcon({ code }: { code: LangCode }) {
+  const cls = "h-3 w-[18px] shrink-0 rounded-[2px] ring-1 ring-white/25";
+  switch (code) {
+    case "en":
+      return (
+        <svg className={cls} viewBox="0 0 60 30" aria-hidden="true">
+          <clipPath id="gl-uk-clip">
+            <path d="M30,15h30v15zv15H30zH0v-15zv-15h30z" />
+          </clipPath>
+          <path fill="#012169" d="M0,0v30h60V0z" />
+          <path stroke="#fff" strokeWidth="6" d="M0,0 60,30M60,0 0,30" />
+          <path
+            stroke="#C8102E"
+            strokeWidth="4"
+            clipPath="url(#gl-uk-clip)"
+            d="M0,0 60,30M60,0 0,30"
+          />
+          <path stroke="#fff" strokeWidth="10" d="M30,0v30M0,15h60" />
+          <path stroke="#C8102E" strokeWidth="6" d="M30,0v30M0,15h60" />
+        </svg>
+      );
+    case "el":
+      return (
+        <svg className={cls} viewBox="0 0 27 18" aria-hidden="true">
+          <rect width="27" height="18" fill="#0D5EAF" />
+          <path
+            stroke="#fff"
+            strokeWidth="2"
+            d="M0,3h27M0,7h27M0,11h27M0,15h27"
+          />
+          <rect width="10" height="10" fill="#0D5EAF" />
+          <path stroke="#fff" strokeWidth="2" d="M5,0v10M0,5h10" />
+        </svg>
+      );
+    case "it":
+      return (
+        <svg className={cls} viewBox="0 0 3 2" aria-hidden="true">
+          <rect width="1" height="2" fill="#009246" />
+          <rect x="1" width="1" height="2" fill="#fff" />
+          <rect x="2" width="1" height="2" fill="#CE2B37" />
+        </svg>
+      );
+    case "fr":
+      return (
+        <svg className={cls} viewBox="0 0 3 2" aria-hidden="true">
+          <rect width="1" height="2" fill="#002395" />
+          <rect x="1" width="1" height="2" fill="#fff" />
+          <rect x="2" width="1" height="2" fill="#ED2939" />
+        </svg>
+      );
+    case "es":
+      return (
+        <svg className={cls} viewBox="0 0 3 2" aria-hidden="true">
+          <rect width="3" height="2" fill="#AA151B" />
+          <rect y="0.5" width="3" height="1" fill="#F1BF00" />
+        </svg>
+      );
+    case "de":
+      return (
+        <svg className={cls} viewBox="0 0 3 2" aria-hidden="true">
+          <rect width="3" height="0.667" fill="#000" />
+          <rect y="0.667" width="3" height="0.667" fill="#DD0000" />
+          <rect y="1.333" width="3" height="0.667" fill="#FFCE00" />
+        </svg>
+      );
+    case "pt":
+      return (
+        <svg className={cls} viewBox="0 0 3 2" aria-hidden="true">
+          <rect width="1.2" height="2" fill="#046A38" />
+          <rect x="1.2" width="1.8" height="2" fill="#DA291C" />
+          <circle
+            cx="1.2"
+            cy="1"
+            r="0.34"
+            fill="none"
+            stroke="#FFE900"
+            strokeWidth="0.14"
+          />
+        </svg>
+      );
+  }
+}
+
+/** Language pill row — SVG flag + code (e.g. ΕΛ), identical on
+ *  desktop and mobile. */
 function LangSwitcher({
   lang,
   onChange,
@@ -95,9 +181,7 @@ function LangSwitcher({
                 "hover:border-white/50 hover:text-white")
           }
         >
-          <span className="text-[15px] leading-none" aria-hidden="true">
-            {l.flag}
-          </span>
+          <FlagIcon code={l.code} />
           {l.pill}
         </button>
       ))}
