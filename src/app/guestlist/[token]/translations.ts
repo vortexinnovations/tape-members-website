@@ -2,10 +2,10 @@
  * Guest-list form translations (July 22, 2026).
  *
  * The QR self-add form is used at Tape Mykonos where many guests
- * don't speak English. Six languages, chosen for the island's actual
- * visitor mix: English (default), Greek (locals), Italian + French
- * (largest tourist groups), Spanish, German. Hebrew/Arabic are common
- * too but RTL needs layout mirroring — deliberately deferred.
+ * don't speak English. Ten languages: English (default), Greek
+ * (locals), Italian + French (largest tourist groups), Spanish,
+ * German, Portuguese, Chinese (Simplified), Arabic (RTL — the form
+ * card flips `dir`, see the `rtl` flag), Russian.
  *
  * How it composes with the admin-configured copy on
  * /qrGuestlistAdmin: in ENGLISH the form keeps preferring the
@@ -19,7 +19,9 @@
  * raw message for anything unrecognised.
  */
 
-export type LangCode = "en" | "el" | "it" | "fr" | "es" | "de" | "pt";
+export type LangCode =
+  | "en" | "el" | "it" | "fr" | "es" | "de" | "pt"
+  | "zh" | "ar" | "ru";
 
 export const LANGS: { code: LangCode; pill: string; name: string }[] = [
   { code: "en", pill: "EN", name: "English" },
@@ -29,9 +31,14 @@ export const LANGS: { code: LangCode; pill: string; name: string }[] = [
   { code: "es", pill: "ES", name: "Español" },
   { code: "de", pill: "DE", name: "Deutsch" },
   { code: "pt", pill: "PT", name: "Português" },
+  { code: "zh", pill: "中文", name: "中文" },
+  { code: "ar", pill: "عربي", name: "العربية" },
+  { code: "ru", pill: "RU", name: "Русский" },
 ];
 
 export interface GuestlistStrings {
+  /** Right-to-left script (Arabic) — the form card flips `dir`. */
+  rtl?: boolean;
   formTitle: string;
   formSubtitle: string;
   fullNameLabel: string;
@@ -523,6 +530,180 @@ export const STRINGS: Record<LangCode, GuestlistStrings> = {
       "Jul", "Ago", "Set", "Out", "Nov", "Dez",
     ],
   },
+
+  zh: {
+    formTitle: "加入宾客名单",
+    formSubtitle: "把你和同行朋友加入名单。",
+    fullNameLabel: "你的全名",
+    fullNamePlaceholder: "名字和姓氏",
+    guestsLabel: "同行宾客（可选）",
+    guestPlaceholder: (n) => `宾客 ${n} 的全名`,
+    addGuest: "+ 添加宾客",
+    removeGuest: "移除宾客",
+    upToGuests: (n) => `最多 ${n} 位宾客。`,
+    emailLabel: "邮箱",
+    optionalSuffix: "（可选）",
+    emailPlaceholder: "you@example.com",
+    phoneLabel: "电话",
+    phonePlaceholder: "手机号码",
+    joining: "提交中…",
+    joinButton: "加入名单",
+    errName: "请输入你的姓名。",
+    errEmail: "请输入你的邮箱地址。",
+    errPhone: "请输入你的电话号码。",
+    errHuman: "请稍候——正在验证你不是机器人。请重试。",
+    errGeneric: "出了点问题，请重试。",
+    errNetwork: "网络错误，请重试。",
+    successTitle: "你已加入名单！",
+    successMessage: "截图保存下方二维码，入场时向门口出示。",
+    doorInstruction: "入场时请出示此二维码。",
+    onTheList: "名单上",
+    getDirections: "查看路线",
+    makeAnother: "+ 再次预订",
+    appAdvert:
+      "我们还有 App——每次光临赚取 Tape Coins，解锁奖励与折扣。",
+    errFull: "抱歉，名单已满。",
+    errExpired: "该名单已过期。",
+    errInvalidQr: "此二维码已失效。",
+    errThrottle: "该设备提交次数过多，请稍后再试。",
+    errVerify: "验证失败，请重试。",
+    errSignupsClosed: "名单报名暂时关闭。",
+    errClosedList: "该名单已关闭。",
+    fbNotFoundTitle: "链接不存在",
+    fbNotFoundMsg: "此链接已失效。请向推广人索取新链接。",
+    fbSignupsClosedTitle: "报名已关闭",
+    fbSignupsClosedMsg: "报名暂时关闭，请稍后再来。",
+    fbListClosedTitle: "名单已关闭",
+    fbListClosedMsg: "该名单已关闭。请向推广人索取今晚的链接。",
+    fbFullTitle: "名单已满",
+    fbFullMsg: "抱歉——名单已满。",
+    fbAppNudge: "顺便下载 Tape Members App：",
+    days: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"],
+    months: [
+      "1月", "2月", "3月", "4月", "5月", "6月",
+      "7月", "8月", "9月", "10月", "11月", "12月",
+    ],
+  },
+
+  ar: {
+    rtl: true,
+    formTitle: "انضم إلى قائمة الضيوف",
+    formSubtitle: "أضف نفسك وضيوفك إلى القائمة.",
+    fullNameLabel: "اسمك الكامل",
+    fullNamePlaceholder: "الاسم الأول واسم العائلة",
+    guestsLabel: "ضيوفك (اختياري)",
+    guestPlaceholder: (n) => `الاسم الكامل للضيف ${n}`,
+    addGuest: "+ أضف ضيفًا",
+    removeGuest: "إزالة الضيف",
+    upToGuests: (n) => `حتى ${n} ضيوف.`,
+    emailLabel: "البريد الإلكتروني",
+    optionalSuffix: " (اختياري)",
+    emailPlaceholder: "you@example.com",
+    phoneLabel: "الهاتف",
+    phonePlaceholder: "رقم الجوال",
+    joining: "جارٍ الإرسال…",
+    joinButton: "انضم إلى القائمة",
+    errName: "يرجى إدخال اسمك.",
+    errEmail: "يرجى إدخال بريدك الإلكتروني.",
+    errPhone: "يرجى إدخال رقم هاتفك.",
+    errHuman: "لحظة من فضلك — نتحقق أنك لست روبوتًا. حاول مرة أخرى.",
+    errGeneric: "حدث خطأ ما. حاول مرة أخرى.",
+    errNetwork: "خطأ في الشبكة. حاول مرة أخرى.",
+    successTitle: "أنت على القائمة!",
+    successMessage:
+      "التقط لقطة شاشة لرمز QR أدناه وأظهره عند الباب.",
+    doorInstruction: "أظهر رمز QR هذا عند الباب.",
+    onTheList: "على القائمة",
+    getDirections: "الاتجاهات",
+    makeAnother: "+ حجز آخر",
+    appAdvert:
+      "لدينا تطبيق أيضًا — اكسب Tape Coins في كل زيارة واحصل على " +
+      "مكافآت وخصومات.",
+    errFull: "عذرًا، القائمة ممتلئة الآن.",
+    errExpired: "انتهت صلاحية هذه القائمة.",
+    errInvalidQr: "رمز QR هذا لم يعد صالحًا.",
+    errThrottle: "محاولات كثيرة من هذا الجهاز. حاول لاحقًا.",
+    errVerify: "فشل التحقق. حاول مرة أخرى.",
+    errSignupsClosed: "التسجيل مغلق حاليًا.",
+    errClosedList: "هذه القائمة مغلقة.",
+    fbNotFoundTitle: "الرابط غير موجود",
+    fbNotFoundMsg:
+      "هذا الرابط لم يعد صالحًا. اطلب رابطًا جديدًا من المروّج.",
+    fbSignupsClosedTitle: "التسجيل مغلق",
+    fbSignupsClosedMsg: "التسجيل مغلق حاليًا. عد لاحقًا.",
+    fbListClosedTitle: "أُغلقت القائمة",
+    fbListClosedMsg:
+      "أُغلقت هذه القائمة. اطلب رابط الليلة من المروّج.",
+    fbFullTitle: "القائمة ممتلئة",
+    fbFullMsg: "عذرًا — القائمة ممتلئة.",
+    fbAppNudge: "وأنت هنا — حمّل تطبيق Tape Members:",
+    days: [
+      "أحد", "اثنين", "ثلاثاء", "أربعاء", "خميس", "جمعة", "سبت",
+    ],
+    months: [
+      "ينا", "فبر", "مار", "أبر", "ماي", "يون",
+      "يول", "أغس", "سبت", "أكت", "نوف", "ديس",
+    ],
+  },
+
+  ru: {
+    formTitle: "Запишись в гостевой список",
+    formSubtitle: "Добавь себя и своих гостей в список.",
+    fullNameLabel: "Твоё полное имя",
+    fullNamePlaceholder: "Имя и фамилия",
+    guestsLabel: "Твои гости (необязательно)",
+    guestPlaceholder: (n) => `Полное имя гостя ${n}`,
+    addGuest: "+ Добавить гостя",
+    removeGuest: "Убрать гостя",
+    upToGuests: (n) => `До ${n} гостей.`,
+    emailLabel: "Email",
+    optionalSuffix: " (необязательно)",
+    emailPlaceholder: "you@example.com",
+    phoneLabel: "Телефон",
+    phonePlaceholder: "Номер мобильного",
+    joining: "Отправка…",
+    joinButton: "В список",
+    errName: "Введи своё имя.",
+    errEmail: "Введи свой email.",
+    errPhone: "Введи свой номер телефона.",
+    errHuman: "Секунду — проверяем, что ты не робот. Попробуй ещё раз.",
+    errGeneric: "Что-то пошло не так. Попробуй ещё раз.",
+    errNetwork: "Ошибка сети. Попробуй ещё раз.",
+    successTitle: "Ты в списке!",
+    successMessage:
+      "Сделай скриншот QR-кода ниже и покажи его на входе.",
+    doorInstruction: "Покажи этот QR-код на входе.",
+    onTheList: "В списке",
+    getDirections: "Маршрут",
+    makeAnother: "+ Ещё одна запись",
+    appAdvert:
+      "У нас есть приложение — зарабатывай Tape Coins с каждым " +
+      "визитом и получай награды и скидки.",
+    errFull: "К сожалению, список заполнен.",
+    errExpired: "Срок действия списка истёк.",
+    errInvalidQr: "Этот QR-код больше не действителен.",
+    errThrottle:
+      "Слишком много записей с этого устройства. Попробуй позже.",
+    errVerify: "Проверка не пройдена. Попробуй ещё раз.",
+    errSignupsClosed: "Запись временно закрыта.",
+    errClosedList: "Этот список закрыт.",
+    fbNotFoundTitle: "Ссылка не найдена",
+    fbNotFoundMsg:
+      "Эта ссылка больше не действует. Попроси у промоутера новую.",
+    fbSignupsClosedTitle: "Запись закрыта",
+    fbSignupsClosedMsg: "Запись временно закрыта. Загляни позже.",
+    fbListClosedTitle: "Список закрыт",
+    fbListClosedMsg:
+      "Этот список закрыт. Попроси у промоутера сегодняшнюю ссылку.",
+    fbFullTitle: "Список заполнен",
+    fbFullMsg: "К сожалению — список заполнен.",
+    fbAppNudge: "Раз уж ты здесь — скачай приложение Tape Members:",
+    days: ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"],
+    months: [
+      "Янв", "Фев", "Мар", "Апр", "Май", "Июн",
+      "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек",
+    ],
+  },
 };
 
 /** Best-match a LangCode from an Accept-Language header (or a
@@ -535,7 +716,8 @@ export function pickLang(accept: string | null | undefined): LangCode {
     .map((part) => part.split(";")[0].trim().slice(0, 2));
   for (const c of codes) {
     if (c === "en" || c === "el" || c === "it" || c === "fr" ||
-        c === "es" || c === "de" || c === "pt") {
+        c === "es" || c === "de" || c === "pt" || c === "zh" ||
+        c === "ar" || c === "ru") {
       return c as LangCode;
     }
   }

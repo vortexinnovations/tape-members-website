@@ -151,6 +151,40 @@ function FlagIcon({ code }: { code: LangCode }) {
           />
         </svg>
       );
+    case "zh":
+      return (
+        <svg className={cls} viewBox="0 0 30 20" aria-hidden="true">
+          <rect width="30" height="20" fill="#DE2910" />
+          <polygon
+            fill="#FFDE00"
+            points="5,2 5.68,4.07 7.85,4.07 6.09,5.36 6.76,7.43 5,6.15 3.24,7.43 3.91,5.36 2.15,4.07 4.32,4.07"
+          />
+          <circle cx="9.5" cy="2" r="0.7" fill="#FFDE00" />
+          <circle cx="11.3" cy="3.8" r="0.7" fill="#FFDE00" />
+          <circle cx="11.3" cy="6.2" r="0.7" fill="#FFDE00" />
+          <circle cx="9.5" cy="8" r="0.7" fill="#FFDE00" />
+        </svg>
+      );
+    case "ar":
+      // UAE flag — crisp geometry at 18×12 and instantly recognisable
+      // to the Gulf visitors who make up most of the Arabic-speaking
+      // crowd (the Saudi flag's calligraphy is illegible this small).
+      return (
+        <svg className={cls} viewBox="0 0 6 4" aria-hidden="true">
+          <rect width="6" height="4" fill="#00843D" />
+          <rect y="1.333" width="6" height="1.334" fill="#fff" />
+          <rect y="2.667" width="6" height="1.333" fill="#000" />
+          <rect width="1.5" height="4" fill="#CE1126" />
+        </svg>
+      );
+    case "ru":
+      return (
+        <svg className={cls} viewBox="0 0 3 2" aria-hidden="true">
+          <rect width="3" height="0.667" fill="#fff" />
+          <rect y="0.667" width="3" height="0.667" fill="#0039A6" />
+          <rect y="1.333" width="3" height="0.667" fill="#D52B1E" />
+        </svg>
+      );
   }
 }
 
@@ -371,7 +405,10 @@ export default function GuestlistForm({
       !!session.eventDateDisplay ||
       !!session.locationAddress;
     return (
-      <div className="rounded-3xl border border-white/10 bg-black/55 p-8 text-center backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
+      <div
+        dir={t.rtl ? "rtl" : "ltr"}
+        className="rounded-3xl border border-white/10 bg-black/55 p-8 text-center backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)]"
+      >
         <h1 className="font-tape text-xl uppercase tracking-[0.15em] text-white">
           {t.successTitle}
         </h1>
@@ -484,7 +521,10 @@ export default function GuestlistForm({
 
   // ── Form ──
   return (
-    <div className="rounded-3xl border border-white/10 bg-black/55 p-7 backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)]">
+    <div
+      dir={t.rtl ? "rtl" : "ltr"}
+      className="rounded-3xl border border-white/10 bg-black/55 p-7 backdrop-blur-md shadow-[0_20px_60px_rgba(0,0,0,0.55)]"
+    >
       <LangSwitcher lang={lang} onChange={changeLang} />
 
       <h1 className="font-tape text-xl uppercase tracking-[0.15em] text-white">
@@ -587,6 +627,9 @@ export default function GuestlistForm({
             {session.emailMandatory ? "" : t.optionalSuffix}
           </label>
           <input
+            // Email addresses are Latin-script — keep the field LTR
+            // even when the surrounding form is Arabic.
+            dir="ltr"
             className={inputBase}
             type="email"
             value={email}
@@ -605,6 +648,8 @@ export default function GuestlistForm({
               {session.phoneMandatory ? "" : t.optionalSuffix}
             </label>
             <input
+              // Phone numbers read LTR even in RTL scripts.
+              dir="ltr"
               className={inputBase}
               type="tel"
               value={phone}
