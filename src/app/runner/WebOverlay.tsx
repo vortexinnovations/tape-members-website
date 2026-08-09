@@ -24,9 +24,9 @@ import type { GameOverMessage, GameToFlutterMessage } from './game/bridge';
 import {
   fetchWebLeaderboard,
   flagEmoji,
-  getSavedNickname,
+  getSavedAlias,
   getWid,
-  saveNickname,
+  saveAlias,
   submitWebScore,
   TURNSTILE_SITE_KEY,
   type SubmitWebScoreResult,
@@ -57,7 +57,9 @@ export default function WebOverlay() {
   const [wid, setWid] = useState('');
 
   const [over, setOver] = useState<GameOverMessage | null>(null);
-  const [nickname, setNickname] = useState('');
+  // Server-assigned alias ("Midnight Fox 1234") — players can't
+  // pick their own name. Cached locally after the first submit.
+  const [alias, setAlias] = useState('');
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
   const [submitResult, setSubmitResult] =
     useState<SubmitWebScoreResult | null>(null);
@@ -83,7 +85,7 @@ export default function WebOverlay() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setStandalone(true);
     setWid(getWid());
-    setNickname(getSavedNickname());
+    setAlias(getSavedAlias());
   }, []);
 
   // Bridge fallback events → game-over card.
@@ -171,13 +173,10 @@ export default function WebOverlay() {
 
   const onSubmit = useCallback(async () => {
     if (!over || submitState === 'sending') return;
-    const nick = nickname.trim() || 'Guest';
-    saveNickname(nick);
     setSubmitState('sending');
     setSubmitError('');
     const result = await submitWebScore({
       wid,
-      nickname: nick,
       turnstileToken: tsToken,
       score: over.score,
       distance: over.distance,
@@ -189,6 +188,10 @@ export default function WebOverlay() {
     });
     resetTurnstile();
     if (result.ok) {
+      if (result.nickname) {
+        saveAlias(result.nickname);
+        setAlias(result.nickname);
+      }
       setSubmitResult(result);
       setSubmitState('done');
       void loadBoard();
@@ -196,7 +199,7 @@ export default function WebOverlay() {
       setSubmitError(result.error || 'Something went wrong.');
       setSubmitState('error');
     }
-  }, [over, submitState, nickname, wid, tsToken, resetTurnstile, loadBoard]);
+  }, [over, submitState, wid, tsToken, resetTurnstile, loadBoard]);
 
   const onPlayAgain = useCallback(() => {
     setOver(null);
@@ -303,24 +306,18 @@ export default function WebOverlay() {
 
             {submitState !== 'done' && (
               <>
-                <input
-                  value={nickname}
-                  onChange={(e) => setNickname(e.target.value)}
-                  maxLength={24}
-                  placeholder="Your name on the board"
+                <p
                   style={{
-                    width: '100%',
-                    boxSizing: 'border-box',
-                    background: 'rgba(255,255,255,0.06)',
-                    border: `1px solid ${HAIRLINE}`,
-                    borderRadius: 10,
-                    color: '#fff',
-                    padding: '11px 12px',
-                    fontSize: 14,
-                    outline: 'none',
-                    marginBottom: 10,
+                    margin: '0 0 10px',
+                    color: 'rgba(255,255,255,0.55)',
+                    fontSize: 12,
+                    textAlign: 'center',
                   }}
-                />
+                >
+                  {alias
+                    ? `Playing as ${alias}`
+                    : 'You get a random alias on the board'}
+                </p>
                 {/* Turnstile mounts here — invisible unless a
                     challenge is required. */}
                 <div ref={tsRef} style={{ marginBottom: 4 }} />

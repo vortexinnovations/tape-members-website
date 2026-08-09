@@ -29,7 +29,7 @@ export const TURNSTILE_SITE_KEY =
   process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '0x4AAAAAAC7JTrVNzw5PrnMn';
 
 const WID_COOKIE = 'tape_runner_wid';
-const NICK_KEY = 'tape_runner_nick';
+const ALIAS_KEY = 'tape_runner_alias';
 
 /**
  * Stable per-browser player id. Cookie-first (400-day max-age —
@@ -100,12 +100,16 @@ function safeStorageSet(key: string, value: string) {
   }
 }
 
-export function getSavedNickname(): string {
-  return safeStorageGet(NICK_KEY);
+// Players can't choose their own name — the backend derives a
+// stable random-looking alias from the wid (e.g. "Midnight Fox
+// 1234") and returns it on every submit. We cache it locally only
+// so the UI can say "playing as …" before the first fetch.
+export function getSavedAlias(): string {
+  return safeStorageGet(ALIAS_KEY);
 }
 
-export function saveNickname(nick: string) {
-  safeStorageSet(NICK_KEY, nick.trim().slice(0, 24));
+export function saveAlias(alias: string) {
+  if (alias) safeStorageSet(ALIAS_KEY, alias.slice(0, 40));
 }
 
 /** ISO-3166 alpha-2 → flag emoji. Unknown/empty → globe. */
@@ -177,7 +181,6 @@ export async function fetchWebLeaderboard(
 
 export type SubmitWebScorePayload = {
   wid: string;
-  nickname: string;
   turnstileToken: string;
   score: number;
   distance: number;
