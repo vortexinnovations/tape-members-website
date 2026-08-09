@@ -74,6 +74,12 @@ export default function WebOverlay() {
   const tsRef = useRef<HTMLDivElement | null>(null);
   const tsWidgetId = useRef<string | null>(null);
   const [tsToken, setTsToken] = useState('');
+  // Ref mirror so the watchdog timer can read the latest token
+  // without re-arming on every token change.
+  const tsTokenRef = useRef('');
+  useEffect(() => {
+    tsTokenRef.current = tsToken;
+  }, [tsToken]);
 
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
@@ -105,8 +111,13 @@ export default function WebOverlay() {
       window.removeEventListener('tape-runner-web-message', onMessage);
   }, [standalone]);
 
-  // Mount the Turnstile widget the first time the game-over card
-  // opens (its container div only exists inside the card).
+  // Mount a FRESH Turnstile widget every time the game-over card
+  // opens, and tear it down when the card closes. The container
+  // div lives inside the card, so a widget from a previous run
+  // would be orphaned when the card unmounts — and a stale
+  // tsWidgetId would then block the re-render, leaving the next
+  // game-over stuck on "Checking…" with no widget at all (bug
+  // reported Aug 9, 2026 after the first live session).
   useEffect(() => {
     if (!standalone || !over) return;
     let cancelled = false;
@@ -122,7 +133,16 @@ export default function WebOverlay() {
         appearance: 'interaction-only',
         callback: (t: string) => setTsToken(t),
         'error-callback': () => setTsToken(''),
-        'expired-callback': () => setTsToken(''),
+        // Tokens expire after ~5 min — re-run the challenge so a
+        // card left open doesn't dead-end on "Checking…".
+        'expired-callback': () => {
+          setTsToken('');
+          try {
+            window.turnstile?.reset(tsWidgetId.current ?? undefined);
+          } catch {
+            /* no-op */
+          }
+        },
       });
     };
     if (window.turnstile) {
@@ -145,8 +165,33 @@ export default function WebOverlay() {
       }, 200);
       setTimeout(() => clearInterval(iv), 10000);
     }
+    // Watchdog: if no token has arrived 12 s after the card opened
+    // (dropped challenge, transient network blip), kick the widget
+    // once. A genuine block (adblock ate the script) still shows
+    // "Checking…" — but the player always has Play again / Skip.
+    const watchdog = window.setTimeout(() => {
+      if (!tsTokenRef.current && tsWidgetId.current) {
+        try {
+          window.turnstile?.reset(tsWidgetId.current);
+        } catch {
+          /* no-op */
+        }
+      }
+    }, 12000);
     return () => {
       cancelled = true;
+      window.clearTimeout(watchdog);
+      // Card is closing (or over changed) — remove the widget so
+      // the next open renders a fresh one into the new container.
+      if (tsWidgetId.current) {
+        try {
+          window.turnstile?.remove(tsWidgetId.current);
+        } catch {
+          /* no-op */
+        }
+        tsWidgetId.current = null;
+      }
+      setTsToken('');
     };
   }, [standalone, over]);
 
