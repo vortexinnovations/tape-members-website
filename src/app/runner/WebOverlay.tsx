@@ -553,9 +553,7 @@ function BoardList({
             >
               {i + 1}
             </span>
-            <span style={{ fontSize: 16, flexShrink: 0 }} aria-hidden>
-              {flagEmoji(r.countryCode)}
-            </span>
+            <FlagIcon countryCode={r.countryCode} />
             <span
               style={{
                 flex: 1,
@@ -584,6 +582,39 @@ function BoardList({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Country flag as an IMAGE, not emoji — Windows ships no flag
+ * emoji at all (Chrome/Edge render the regional-indicator pair as
+ * bare "GB" letters), so emoji-only flags break for every Windows
+ * player. flagcdn.com serves tiny cacheable PNGs for all ISO
+ * codes; on load failure (offline, adblock, unknown code) we fall
+ * back to the globe emoji, which every platform does render.
+ */
+function FlagIcon({ countryCode }: { countryCode: string }) {
+  const [broken, setBroken] = useState(false);
+  const code = (countryCode || '').trim().toLowerCase();
+  if (!/^[a-z]{2}$/.test(code) || broken) {
+    return (
+      <span style={{ fontSize: 15, flexShrink: 0 }} aria-hidden>
+        {flagEmoji(countryCode)}
+      </span>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`https://flagcdn.com/32x24/${code}.png`}
+      srcSet={`https://flagcdn.com/64x48/${code}.png 2x`}
+      width={20}
+      height={15}
+      alt={code.toUpperCase()}
+      loading="lazy"
+      onError={() => setBroken(true)}
+      style={{ borderRadius: 2, flexShrink: 0, display: 'block' }}
+    />
   );
 }
 
