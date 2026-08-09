@@ -321,8 +321,19 @@ export function postToFlutter(message: GameToFlutterMessage): void {
       console.error('[bridge] postMessage failed', e);
     }
   } else {
-    // Standalone browser mode — just log so the page is testable
-    // without the Flutter wrapper.
+    // Standalone browser mode (no Flutter WebView). Surface the
+    // message to the web overlay — the browser-only leaderboard UI
+    // listens for this event to catch `gameOver`. This branch NEVER
+    // runs inside the app: the WebView registers GameToFlutter
+    // before page load, so the channel path above always wins there.
+    try {
+      window.dispatchEvent(
+        new CustomEvent('tape-runner-web-message', { detail: message }),
+      );
+    } catch {
+      /* no-op — event dispatch is best-effort */
+    }
+    // Keep the console log so the page stays debuggable standalone.
     // eslint-disable-next-line no-console
     console.log('[GameToFlutter→]', message);
   }

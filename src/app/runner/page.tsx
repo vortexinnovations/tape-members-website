@@ -26,6 +26,7 @@ import { useEffect, useRef } from 'react';
 import { RunnerGame } from './game/game';
 import { postToFlutter, type InitPayload } from './game/bridge';
 import { fetchRunnerSettings } from './game/settings';
+import WebOverlay from './WebOverlay';
 
 export default function RunnerPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -129,27 +130,28 @@ export default function RunnerPage() {
         }}
       />
       <DevHud />
+      {/* Browser-only leaderboard overlay. Renders null inside the
+          Flutter WebView (embed=1 / GameToFlutter present) — the
+          in-app experience is untouched. */}
+      <WebOverlay />
     </main>
   );
 }
 
 /**
  * Tiny dev-mode HUD with a "force game-over" button so we can test
- * the JS→Flutter bridge without actually dying. Removed once the
- * real game-over flow is wired in subsequent commits.
+ * the bridge without actually dying.
  *
- * Hidden when the URL has `?embed=1` (i.e. we're inside Flutter)
- * AND the host doesn't have `&dev=1` — admin can append `&dev=1`
- * to see the button even from inside the app for debugging.
+ * Aug 9, 2026 — standalone browser mode is now a REAL player
+ * surface (browser-only leaderboard), so the button no longer
+ * shows by default outside the app. It's `?dev=1` only, in any
+ * mode (works both standalone and inside the Flutter WebView).
  */
 function DevHud() {
   const visible =
       typeof window === 'undefined'
-          ? true
-          : (() => {
-              const sp = new URLSearchParams(window.location.search);
-              return sp.get('embed') !== '1' || sp.get('dev') === '1';
-            })();
+          ? false
+          : new URLSearchParams(window.location.search).get('dev') === '1';
   if (!visible) return null;
   return (
     <div
