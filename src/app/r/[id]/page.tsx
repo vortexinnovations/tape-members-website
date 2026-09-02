@@ -137,7 +137,7 @@ export default async function ReelSharePage({
 // top-level const so both the page body and the OG metadata can
 // reference it without duplicating the URL.
 const TAPE_LOGO_URL =
-  "https://firebasestorage.googleapis.com/v0/b/tape-members.appspot.com/o/appui%2Ftape%20london%20logo.png?alt=media&token=0dcad8c4-610f-4fb3-9675-131fef579cac";
+  "https://tape-media.vortexinnovationsltd.workers.dev/appui/tape%20london%20logo.png";
 
 /**
  * Server-rendered OG tags — the reason this page is Next.js and
