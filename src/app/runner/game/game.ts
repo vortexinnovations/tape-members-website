@@ -276,6 +276,8 @@ export class RunnerGame {
   private jumpAssetReady = false;
   private fallAssetReady = false;
   private assetsReady = false;
+  /** Clears the loading overlay if an asset download never settles. */
+  private loadingWatchdog: ReturnType<typeof setTimeout> | undefined;
   private playerLane = 1;
   // Explicit `number` annotations — without them TS infers the
   // literal type `0` from LANE_X[1] (because LANES.X is `as const`)
@@ -944,8 +946,17 @@ export class RunnerGame {
    */
   private async loadJumpCharacter(gender: string) {
     const suffix = gender === 'female' ? 'female' : 'male';
-    // No-op if we already have this gender's jump character.
-    if (this.loadedJumpGender === suffix && this.playerJumpVisual) return;
+    // Already have this gender's jump character. It still has to be
+    // COUNTED as settled: buildPlayerVisual() resets jumpAssetReady
+    // before calling us, and with nothing to load nobody else would
+    // set it again — "Loading…" forever (Oct 17, 2026: a member on a
+    // warm cache, where the first load finished before Flutter's
+    // init('male') arrived, was stuck on it for a day).
+    if (this.loadedJumpGender === suffix && this.playerJumpVisual) {
+      this.jumpAssetReady = true;
+      this.checkAssetsReady();
+      return;
+    }
     // Tear down any previously-loaded jump character (could be
     // the other gender if init() flipped, or a stale instance).
     this.disposeJumpCharacter();
@@ -1199,8 +1210,12 @@ export class RunnerGame {
    */
   private async loadFallCharacter(gender: string) {
     const suffix = gender === 'female' ? 'female' : 'male';
-    // No-op if we already have this gender's fall character.
-    if (this.loadedFallGender === suffix && this.playerFallVisual) return;
+    // Already loaded — still mark it settled (see loadJumpCharacter).
+    if (this.loadedFallGender === suffix && this.playerFallVisual) {
+      this.fallAssetReady = true;
+      this.checkAssetsReady();
+      return;
+    }
     // Tear down any previously-loaded fall character (other gender
     // or stale instance).
     this.disposeFallCharacter();
@@ -1569,6 +1584,19 @@ export class RunnerGame {
     this.fallAssetReady = false;
     this.assetsReady = false;
     this.hud.setLoading(true);
+    // Watchdog: a download that neither finishes nor fails (a stalled
+    // connection) must not trap the player behind the overlay. Every
+    // asset has a fallback (capsule player, procedural jump, instant
+    // game over), so after 20 s we play with whatever has arrived.
+    if (this.loadingWatchdog) clearTimeout(this.loadingWatchdog);
+    this.loadingWatchdog = setTimeout(() => {
+      if (this.assetsReady) return;
+      console.debug('[runner] asset load watchdog fired — playing with fallbacks');
+      this.playerAssetReady = true;
+      this.jumpAssetReady = true;
+      this.fallAssetReady = true;
+      this.checkAssetsReady();
+    }, 20_000);
     // Fire-and-forget. If the GLB exists, it'll swap in shortly;
     // if not, the placeholder stays and the player is none the wiser.
     this.tryLoadGltfPlayer(gender);
