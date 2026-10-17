@@ -41,10 +41,17 @@ let dracoLoaderSingleton: DRACOLoader | null = null;
 function getDracoLoader(): DRACOLoader {
   if (dracoLoaderSingleton) return dracoLoaderSingleton;
   const loader = new DRACOLoader();
-  // gstatic decoder mirrors Three.js's own example — versioned,
-  // cached aggressively across the web. Falls back to JS decoder if
-  // WASM isn't available; both work on iOS WKWebView.
-  loader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+  // SELF-HOSTED (Oct 17, 2026). This used to point at
+  // https://www.gstatic.com/draco/v1/decoders/ — an UNVERSIONED path
+  // Google replaced on 16 Oct 2026 19:29 GMT with a build this
+  // DRACOLoader cannot drive (its worker fetched a relative
+  // "draco_decoder.wasm" instead of using the binary we hand it,
+  // aborted, and every Draco GLB load hung with no rejection — the
+  // game sat on "Loading…" for every player from that evening on).
+  // public/draco/ holds the decoder that ships INSIDE our three
+  // version (node_modules/three/examples/jsm/libs/draco/gltf/), so
+  // the two can never drift apart. Re-copy it when three is bumped.
+  loader.setDecoderPath('/draco/');
   dracoLoaderSingleton = loader;
   return loader;
 }
