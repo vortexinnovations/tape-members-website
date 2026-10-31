@@ -22,16 +22,45 @@
 
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { RunnerGame } from './game/game';
 import { postToFlutter, type InitPayload } from './game/bridge';
 import { fetchRunnerSettings } from './game/settings';
 import WebOverlay from './WebOverlay';
+import OpenAppFallback from '../components/OpenAppFallback';
+
+/**
+ * Oct 31, 2026 — the owner: "only playable from the phone right now".
+ * Opened in a normal browser (not the app's WebView) the page shows
+ * the get-the-app screen instead of the game. Same test the browser
+ * leaderboard overlay uses (WebOverlay.tsx): `embed=1` (the app's URL,
+ * runner_widget.dart `gameUrl`) or the WebView's GameToFlutter
+ * channel. Flip to `true` to bring browser play back — no app release
+ * either way, the app loads this page live.
+ */
+const WEB_PLAY_ENABLED = false;
+
+const noSubscribe = () => () => {};
+
+function isInApp(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (
+    new URLSearchParams(window.location.search).get('embed') === '1' ||
+    !!window.GameToFlutter
+  );
+}
 
 export default function RunnerPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // 'pending' on the server (no window), decided on the client.
+  const mode = useSyncExternalStore(
+    noSubscribe,
+    () => (WEB_PLAY_ENABLED || isInApp() ? 'game' : 'blocked'),
+    () => 'pending',
+  );
 
   useEffect(() => {
+    if (mode !== 'game') return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -106,7 +135,19 @@ export default function RunnerPage() {
       document.body.style.touchAction = prevHtml.touchAction;
       document.body.style.overscrollBehavior = prevHtml.overscroll;
     };
-  }, []);
+  }, [mode]);
+
+  if (mode === 'blocked') {
+    return (
+      <OpenAppFallback
+        headline="Tape Runner"
+        subhead="Tape Runner is played in the Tape Members app. Get the app to play and climb the leaderboard."
+      />
+    );
+  }
+  if (mode === 'pending') {
+    return <main style={{ position: 'fixed', inset: 0, background: '#070707' }} />;
+  }
 
   return (
     <main
