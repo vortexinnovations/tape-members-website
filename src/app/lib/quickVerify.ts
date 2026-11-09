@@ -106,6 +106,9 @@ export const DEFAULT_TEXT = {
   continueBody: "Tap continue to pick up where you left off.",
   continueButton: "Continue",
   signOut: "Not you? Sign out",
+  stopTitle: "Emails stopped",
+  stopBody: "You won't get any more emails from us about the app.",
+  stopSignIn: "Sign in to stop the emails about the app.",
 } as const;
 
 export type TextKey = keyof typeof DEFAULT_TEXT;
@@ -215,6 +218,8 @@ export type QvUserDoc = {
   sumsubReviewAnswer?: string;
   sumsubRejectLabels?: string[];
   quickVerify?: {
+    /** They stopped the follow-up emails. */
+    followUpStopped?: boolean;
     stage?: string;
     saidUnder21?: boolean;
     /** An admin said "not the same person": the stop no longer applies. */

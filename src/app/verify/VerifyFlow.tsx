@@ -59,7 +59,9 @@ import { Choice, ErrorLine, Note, SectionLabel, TextField, TextLink } from "./ui
  *
  * Query string: `?s=door` records where the guest came from;
  * `?test=1` shows the form while the page is closed (the backend still
- * refuses anyone who is not on the tester list). `?preview=<screen>`
+ * refuses anyone who is not on the tester list). `?stop=1` is the link
+ * in the follow-up emails: it signs the guest in if needed and stops
+ * them. `?preview=<screen>`
  * draws any screen with made-up data for design review, in `next dev`
  * only (the same idea as /auth/action): closed, signin, start, email,
  * address, id, passport, verified, existing, underage.
@@ -160,6 +162,7 @@ export default function VerifyFlow() {
   const params = useSearchParams();
   const source = (params.get("s") || "link").slice(0, 24);
   const testMode = params.get("test") === "1";
+  const stopMode = params.get("stop") === "1";
   // Dead code in a production build (NODE_ENV is inlined).
   const preview =
     process.env.NODE_ENV !== "production"
@@ -427,6 +430,20 @@ export default function VerifyFlow() {
     void step("new_token");
   }, [stage, sumsub, busy, step, preview]);
 
+  // The link in a follow-up email: stop them, once, as soon as we know
+  // who this is.
+  const stopAsked = useRef(false);
+  const [stopState, setStopState] = useState<"waiting" | "done" | "failed">(
+    "waiting",
+  );
+  useEffect(() => {
+    if (!stopMode || preview || !user || !knownDoc || stopAsked.current) return;
+    stopAsked.current = true;
+    void runAction("stop_followups").then((r) =>
+      setStopState(r.ok ? "done" : "failed"),
+    );
+  }, [stopMode, preview, user, knownDoc, runAction]);
+
   const signOut = useCallback(async () => {
     if (!fb) return;
     askedForToken.current = false;
@@ -454,8 +471,8 @@ export default function VerifyFlow() {
   const signOutLink = <TextLink onClick={signOut}>{t.signOut}</TextLink>;
 
   if (!user) {
-    const canCreate = open || testMode;
-    if (!canCreate && !signInWhileClosed) {
+    const canCreate = !stopMode && (open || testMode);
+    if (!canCreate && !signInWhileClosed && !stopMode) {
       return (
         <Card>
           <Title>{t.closedTitle}</Title>
@@ -479,12 +496,36 @@ export default function VerifyFlow() {
           onSignedIn={async (needsStart, token) => {
             // A returning guest's own doc says where they are; only a
             // new account (or one that has never used this page) asks.
-            if (needsStart) await start(token);
+            if (needsStart && !stopMode) await start(token);
           }}
         />
+        {stopMode ? <Note>{t.stopSignIn}</Note> : null}
         {botWidget}
         <ErrorLine>{error}</ErrorLine>
       </Card>
+    );
+  }
+
+  if (stopMode) {
+    const done =
+      stopState === "done" || knownDoc?.data?.quickVerify?.followUpStopped === true;
+    return (
+      <>
+        <Card>
+          <StatusIcon
+            kind={done ? "success" : stopState === "failed" ? "error" : "spinner"}
+          />
+          <Title>{done ? t.stopTitle : "One moment"}</Title>
+          <Body>
+            {done
+              ? t.stopBody
+              : stopState === "failed"
+                ? "We couldn't find any emails to stop for this account."
+                : "Stopping the emails…"}
+          </Body>
+        </Card>
+        {signOutLink}
+      </>
     );
   }
 
