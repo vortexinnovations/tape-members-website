@@ -212,6 +212,8 @@ export type QvUserDoc = {
   duplicateOfEmailMasked?: string;
   user_deleted_account?: boolean;
   sumsubPassportRequired?: boolean;
+  sumsubReviewAnswer?: string;
+  sumsubRejectLabels?: string[];
   quickVerify?: {
     stage?: string;
     saidUnder21?: boolean;
@@ -235,9 +237,21 @@ export function stageFrom(u: QvUserDoc | null): Stage {
   if (u.duplicate === true) return "existing_member";
   if (u.idverified === true) return "verified";
   const s = u.quickVerify?.stage;
+  // Sumsub's own duplicate check: the same document is already on another
+  // account. The backend sets the stage (and the masked email when it
+  // found a live account); the Sumsub labels on the guest's own doc say
+  // the same a moment sooner.
+  if (
+    s === "existing_member" ||
+    (u.sumsubReviewAnswer === "RED" &&
+      Array.isArray(u.sumsubRejectLabels) &&
+      u.sumsubRejectLabels.some((l) => String(l).toUpperCase() === "DUPLICATE"))
+  ) {
+    return "existing_member";
+  }
   if (s === "under_age") return "under_age";
   if (s === "email" || s === "address" || s === "id") return s;
-  // `verified` without the flag, `existing_member` without the flag, or
+  // `verified` without the flag, or
   // no map at all: ask the backend where they are.
   return "start";
 }
