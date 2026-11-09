@@ -217,6 +217,8 @@ export type QvUserDoc = {
   quickVerify?: {
     stage?: string;
     saidUnder21?: boolean;
+    /** An admin said "not the same person": the stop no longer applies. */
+    cleared?: boolean;
   };
 };
 
@@ -243,7 +245,8 @@ export function stageFrom(u: QvUserDoc | null): Stage {
   // the same a moment sooner.
   if (
     s === "existing_member" ||
-    (u.sumsubReviewAnswer === "RED" &&
+    (u.quickVerify?.cleared !== true &&
+      u.sumsubReviewAnswer === "RED" &&
       Array.isArray(u.sumsubRejectLabels) &&
       u.sumsubRejectLabels.some((l) => String(l).toUpperCase() === "DUPLICATE"))
   ) {
