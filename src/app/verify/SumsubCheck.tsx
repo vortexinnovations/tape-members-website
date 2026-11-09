@@ -127,10 +127,7 @@ export default function SumsubCheck({
       </div>
     );
   }
-  return (
-    <div
-      id={CONTAINER_ID}
-      className="mt-5 min-h-[420px] overflow-hidden rounded-2xl bg-black/40"
-    />
-  );
+  // Full width of the phone: the page's side padding is undone here so
+  // Sumsub's frame is not squeezed inside it.
+  return <div id={CONTAINER_ID} className="-mx-5 mt-4 min-h-[360px]" />;
 }

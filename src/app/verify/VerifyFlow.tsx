@@ -121,6 +121,14 @@ const PREVIEWS: Record<string, Preview> = {
     doc: { quickVerify: { stage: "id" } },
     sumsub: PV_SUMSUB,
   },
+  // The ID step with Sumsub's frame mounted (it will show its own
+  // "token invalid" message): for checking the frame's width.
+  idframe: {
+    signedIn: true,
+    open: true,
+    doc: { quickVerify: { stage: "id" } },
+    sumsub: { ...PV_SUMSUB, token: "preview-token" },
+  },
   passport: {
     signedIn: true,
     open: true,
@@ -643,9 +651,12 @@ export default function VerifyFlow() {
       </>
     );
   }
+  // No card on this screen: Sumsub's own frame needs the room. Its
+  // container runs the full width of the phone (-mx-5 undoes the page's
+  // side padding); the words above and the links below keep theirs.
   return (
     <>
-      <Card>
+      <div>
         <Title>{t.idTitle}</Title>
         <Body>{onPassport ? t.idBodyPassport : t.idBodyAny}</Body>
         {inApp ? <Note>{t.inAppBrowser}</Note> : null}
@@ -677,7 +688,7 @@ export default function VerifyFlow() {
             {onPassport ? t.changeToOver21 : t.changeToUnder21}
           </TextLink>
         ) : null}
-      </Card>
+      </div>
       {signOutLink}
     </>
   );
