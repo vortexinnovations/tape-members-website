@@ -43,7 +43,7 @@ export const metadata: Metadata = {
   },
 };
 
-const LAST_UPDATED = "2 May 2026";
+const LAST_UPDATED = "13 November 2026";
 
 export default function PrivacyPolicyPage() {
   return (
@@ -280,10 +280,20 @@ export default function PrivacyPolicyPage() {
             </li>
             <li>
               <strong>
-                Twilio (SMS), Resend (email), Algolia (search), Branch
-                (attribution):
+                Twilio (SMS and WhatsApp), Resend (email), Algolia (search),
+                Branch (attribution):
               </strong>{" "}
               SCCs and equivalent safeguards in place.
+            </li>
+            <li>
+              <strong>
+                Cloudflare, Vercel, Google, Apple and WhatsApp (Meta):
+              </strong>{" "}
+              Data may be processed in the United States and other
+              countries. Transfers are protected by Standard Contractual
+              Clauses with the UK International Data Transfer Addendum and,
+              where the provider is certified, the EU-US Data Privacy
+              Framework and its UK Extension.
             </li>
           </List>
           <p>
@@ -559,7 +569,7 @@ export default function PrivacyPolicyPage() {
               <strong>
                 Communications Providers (Twilio, Resend):
               </strong>{" "}
-              To deliver SMS and email notifications.
+              To deliver SMS, WhatsApp and email messages.
             </li>
             <li>
               <strong>Search Provider (Algolia):</strong> For in-app search
@@ -568,6 +578,35 @@ export default function PrivacyPolicyPage() {
             <li>
               <strong>Attribution (Branch):</strong> For referral and
               share-link tracking.
+            </li>
+            <li>
+              <strong>Media &amp; website protection (Cloudflare):</strong>{" "}
+              To store and deliver the photos and videos in the App, such
+              as profile pictures and content you submit, and to protect our
+              website forms from automated abuse.
+            </li>
+            <li>
+              <strong>Website hosting (Vercel):</strong> To host the Tape
+              Members website and our staff tools, including forms you
+              submit on our website.
+            </li>
+            <li>
+              <strong>Google (beyond Firebase):</strong> For Google Wallet
+              passes, and for security checks that confirm requests come
+              from our genuine app or website (Google Play Integrity and
+              reCAPTCHA).
+            </li>
+            <li>
+              <strong>Apple:</strong> For Apple Wallet passes, push
+              notifications to iPhones, and App Attest, which confirms
+              requests come from our genuine app.
+            </li>
+            <li>
+              <strong>WhatsApp (Meta):</strong> When you message us on
+              WhatsApp, or receive a verification code, booking message or
+              support reply by WhatsApp, your phone number and those
+              messages are processed by WhatsApp (Meta Platforms), through
+              Twilio.
             </li>
             <li>
               <strong>Marketing &amp; analytics services:</strong> Facebook
