@@ -93,7 +93,8 @@ export default function PrivacyPolicyPage() {
           <List>
             <li>
               <strong>Personal information:</strong> Full name, gender,
-              WhatsApp number, Instagram username, email, nationality,
+              WhatsApp number, Instagram username, email, home address,
+              nationality,
               birthdate, and occupation.
             </li>
             <li>
